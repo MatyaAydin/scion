@@ -104,16 +104,17 @@ class BiasRMS(Norm):
     def init(self, g):
         return torch.nn.init.zeros_(g)
 
+
 class SpectralConv(Norm):
     def __init__(self, steps=5):
         self.steps = steps
 
     def lmo(self, g):
         g = zeropower_via_newtonschulz5(g.reshape(len(g), -1), steps=self.steps).view(g.shape)
-        if g.ndim == 3:
+        if g.ndim == 3:    # Conv1d
             out_channels, in_channels, k = g.shape
             g *= (out_channels / in_channels)**0.5 / k
-        elif g.ndim == 4:
+        elif g.ndim == 4:   # Conv2d
             out_channels, in_channels, k, _ = g.shape
             g *= (out_channels / in_channels)**0.5 / (k ** 2)
         return g
@@ -125,10 +126,10 @@ class SpectralConv(Norm):
             for ky in range(k):
                 torch.nn.init.orthogonal_(w_fp[:,:,kx,ky])
         
-        if w.ndim == 3:
+        if w.ndim == 3:     # Conv1d
             out_channels, in_channels, k = w_fp.shape
             w_fp.mul_((out_channels / in_channels)**0.5 / k)
-        elif w.ndim == 4:
+        elif w.ndim == 4:     # Conv2d
             out_channels, in_channels, k, _ = w_fp.shape
             w_fp.mul_((out_channels / in_channels)**0.5 / (k ** 2))
         w.data = w_fp.to(dtype=w.data.dtype)
@@ -238,6 +239,113 @@ class Scion(torch.optim.Optimizer):
         norm_kwargs (dict, optional): Additional arguments for the norm projection (default: None)
         scale (float, optional): Scale factor for updates (default: 1.0)
         unconstrained (bool, optional): Whether to use unconstrained updates (default: False)
+        precond_momentum (float, optional): EMA rate for preconditioner (default: 1.0, disabled)
+        precond_mode (str, optional): Where to apply preconditioner:
+            'before' applies P_k before LMO: lmo(P_k * D_k)
+            'after'  applies P_k after  LMO: P_k * lmo(D_k)
+            'none'   disables preconditioning (default: 'none')
+        precond_eps (float, optional): Epsilon for numerical stability in preconditioner (default: 1e-8)
+    
+    Example:
+        >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1,
+        ...                   precond_momentum=0.1, precond_mode='before')
+    """
+    def __init__(self, params, lr=1e-3, momentum=1.0, precond_momentum=1.0, norm: str='Auto',
+                 norm_kwargs: dict=None, scale=1.0, unconstrained=False,
+                 precond_mode: str='none', precond_eps: float=1e-8):
+        if lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if momentum < 0.0:
+            raise ValueError(f"Invalid momentum value: {momentum}")
+        if precond_mode not in ('none', 'before', 'after'):
+            raise ValueError(f"Invalid precond_mode: {precond_mode!r}, must be 'none', 'before', or 'after'")
+        if norm_kwargs is None:
+            norm_kwargs = {}
+        defaults = dict(lr=lr, momentum=momentum, precond_momentum=precond_momentum,
+                        scale=scale, unconstrained=unconstrained, norm=norm,
+                        norm_kwargs=norm_kwargs, precond_mode=precond_mode,
+                        precond_eps=precond_eps)
+        super().__init__(params, defaults)
+
+    def step(self):
+        for group in self.param_groups:
+            lr             = group['lr']
+            momentum       = group['momentum']
+            precond_momentum = group['precond_momentum']
+            precond_mode   = group['precond_mode']
+            precond_eps    = group['precond_eps']
+            scale          = group['scale']
+            unconstrained  = group['unconstrained']
+            norm_backend   = norm_dict[group['norm']](**group['norm_kwargs'])
+
+            for p in group['params']:
+                g = p.grad
+                if g is None:
+                    continue
+                state = self.state[p]
+
+
+                if momentum != 1.0:
+                    if 'momentum_buffer' not in state:
+                        state['momentum_buffer'] = torch.clone(g)
+                    buf = state['momentum_buffer']
+                    buf.mul_(1 - momentum).add_(g, alpha=momentum)
+                    g = buf
+
+                if precond_mode != 'none' and precond_momentum != 1.0:
+                    if 'precond_buffer' not in state:
+                        state['precond_buffer'] = g.detach().square().clone()
+                    precond_buf = state['precond_buffer']
+                    precond_buf.mul_(1 - precond_momentum).add_(g.square(), alpha=precond_momentum)
+                    # P_k  =  1 / (sqrt(v_k) + eps)   — same shape as g
+                    P = precond_buf.sqrt().add_(precond_eps).reciprocal_()
+                else:
+                    P = None
+
+                if precond_mode == 'before':
+
+                    g_precond = g * P
+                    update = scale * norm_backend.lmo(g_precond)
+
+                elif precond_mode == 'after':
+
+                    update = scale * P * norm_backend.lmo(g)
+
+                else:  # 'none'
+                    update = scale * norm_backend.lmo(g)
+
+
+                if not unconstrained:
+                    p.data.mul_(1 - lr)
+                p.data.add_(update, alpha=-lr)
+
+    def init(self):
+        for group in self.param_groups:
+            norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
+            init_func = norm_backend.init
+            scale = group['scale']
+            for p in group['params']:
+                init_func(p)
+                p.data *= scale
+
+
+class ScionLight(torch.optim.Optimizer):
+    """Memory-efficient variant of the Scion optimizer.
+    
+    This implementation saves memory by storing only the averaged gradient instead of 
+    both the gradient and its average. Note that gradients should not be zeroed since
+    p.grad is used directly to store the gradient average.
+    
+    Args:
+        params: Iterable of parameters to optimize or dicts defining parameter groups
+        lr (float, optional): Learning rate (default: 1e-3)
+        momentum (float, optional): One minus the traditional momentum factor. For example,
+            a traditional momentum of 0.9 would be specified as momentum=0.1 here (default: 1.0)
+        norm (str, optional): Choice of norm for gradient projection ('Auto', 'SpectralConv', 
+            'ColNorm', 'RowNorm', 'BiasRMS', 'Spectral', or 'Sign') (default: 'Auto')
+        norm_kwargs (dict, optional): Additional arguments for the norm projection (default: None)
+        scale (float, optional): Scale factor for updates (default: 1.0)
+        unconstrained (bool, optional): Whether to use unconstrained updates (default: False)
     
     Example:
         >>> radius = 50.0
@@ -252,7 +360,7 @@ class Scion(torch.optim.Optimizer):
         ...     'norm_kwargs': {},
         ...     'scale': radius*60.0,
         ... }]
-        >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
+        >>> optimizer = ScionLight(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False):
         if lr < 0.0:
@@ -263,6 +371,16 @@ class Scion(torch.optim.Optimizer):
             norm_kwargs = {}
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs)
         super().__init__(params, defaults)
+        # Initialize state
+        self._store_grads_in_state()
+        # Do not pass `self` through syntactic sugar. We need the
+        # argument to not be populated.
+        self.register_state_dict_pre_hook(
+            type(self)._store_grads_in_state,
+        )
+        self.register_load_state_dict_post_hook(
+            type(self)._load_grads_from_state,
+        )
 
     def step(self):
         for group in self.param_groups:
@@ -272,22 +390,17 @@ class Scion(torch.optim.Optimizer):
             unconstrained = group['unconstrained']
             norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
             for p in group['params']:
-                g = p.grad
-                if g is None:
+                G = p.grad
+                if G is None:
                     continue
-                state = self.state[p]
 
-                if momentum != 1:
-                    if 'momentum_buffer' not in state.keys():
-                        state['momentum_buffer'] = torch.zeros_like(g).add_(g)
-                    buf = state['momentum_buffer']
-                    buf.mul_(1-momentum).add_(g, alpha=momentum)
-                    g = buf
-
-                update = scale * norm_backend.lmo(g)
+                update = scale * norm_backend.lmo(G)
                 if not unconstrained:
                     p.data.mul_(1-lr)
                 p.data.add_(update, alpha=-lr)
+                
+                if momentum != 1:
+                    G.mul_(1-momentum)
 
     def init(self):
         for group in self.param_groups:
@@ -298,49 +411,59 @@ class Scion(torch.optim.Optimizer):
                 init_func(p)
                 p.data *= scale
 
+    def __getstate__(self):
+        self._store_grads_in_state()
+        return super().__getstate__()
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._load_grads_from_state()
+
+    def _store_grads_in_state(self):
+        for group in self.param_groups:
+            for param in group['params']:
+                if isinstance(param, torch.Tensor) and param.grad is not None:
+                    self.state.setdefault(param, {})['grad_state'] = param.grad
+
+    def _load_grads_from_state(self):
+        for (param, state) in self.state.items():
+            if 'grad_state' in state:
+                param.grad = state['grad_state']
+            elif isinstance(param, torch.Tensor):
+                param.grad = None
+
 
 @torch.compile
-def zeropower_via_newtonschulz5(G, steps=9):
+def zeropower_via_newtonschulz5(G, steps=5):
     """
-    For fair comparison we use the same implementation as the Muon baseline.
-
-    Computing zeroth matrix powers via Lakic 1998.
-    paper: "On the Computation of the Matrix k-th Root"
-    Suppose we have a matrix G = USV^T and we want to compute G^0 defined via G^0 = UV^T.
-    We might want to do this to run "stochastic spectral descent" of Carlson et al 2015.
-    The naive way to do this is via the SVD. But we can also just do (GG^T)^(-1/2) G or
-    alternatively G (G^TG)^(-1/2) and apply the iterative method from Lakic 1998.
-    In particular, we implement the first special case of Alg 1 in that paper.
-
-    Code taken from: https://gist.github.com/jxbz/fe235ee1c72b8b41ccd0d02b43378cf2
-    https://x.com/jxbz/status/1821610280708948103
-    Modifications: To speed things up, I am running this in bfloat16 using torch.compile.
+    From: https://github.com/KellerJordan/modded-nanogpt/blob/master/records/101724_DistributedMuon/22d24867-eb5a-4fcc-ae2c-263d0277dfd1.txt
+    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
+    quintic iteration whose coefficients are selected to maximize the slope at zero. For the purpose
+    of minimizing steps, it turns out to be empirically effective to keep increasing the slope at
+    zero even beyond the point where the iteration no longer converges all the way to one everywhere
+    on the interval. This iteration therefore does not produce UV^T but rather something like US'V^T
+    where S' is diagonal with S_{ii}' ~ Uniform(0.5, 1.5), which turns out not to hurt model
+    performance at all relative to UV^T, where USV^T = G is the SVD.
     """
+    assert len(G.shape) == 2
+    a, b, c = (3.4445, -4.7750,  2.0315)
+    X = G.bfloat16()
+    if G.size(0) > G.size(1):
+        X = X.T
 
-    orig_dtype = G.dtype
-    G = G.bfloat16()
+    # Ensure spectral norm is at most 1
+    X = X / (X.norm() + 1e-7)
+    # Perform the NS iterations
+    for _ in range(steps):
+        A = X @ X.T
+        B = b * A + c * A @ A # adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
+        X = a * X + B @ X
+    
+    if G.size(0) > G.size(1):
+        X = X.T
+    return X
 
-    d1, d2 = G.shape
-    d = min(d1, d2)
-    I = torch.eye(d, device=G.device, dtype=G.dtype)
 
-    # store the smaller of the squares as S
-    S = G @ G.T if d1 < d2 else G.T @ G
-    S_norm = torch.linalg.matrix_norm(S, ord='fro') # there is freedom here. See Lakic (1998) Thm 2.3
-    S /= S_norm
-
-    # Now let's set up the state for the Lakic (1998) method
-    N = S
-    X = I.clone()
-
-    # Now let's run the iteration
-    for step in range(steps):
-        U = (3 * I - N) / 2
-        X = X @ U if step > 0 else U # optimization since X = I on step 0
-        if step < steps-1: # optimization suggested by @EitanTurok https://x.com/EitanTurok/status/1839754807696855333
-            N = N @ U @ U
-    X /= S_norm.sqrt()
-
-    # X should now store either (G G^T)^(-1/2) or (G^T G)^(-1/2)
-    O = X @ G if d1 < d2 else G @ X
-    return O.to(orig_dtype)
+def zeroth_power_via_svd(G):
+   U, S, V = G.svd()
+   return U @ V.T

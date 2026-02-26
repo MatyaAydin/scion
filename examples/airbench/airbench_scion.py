@@ -393,7 +393,14 @@ def main(run, model_trainbias, model_freezebias, lr, momentum):
         dict(norm='BiasRMS', scale=radius, params=[p for n, p in model.named_parameters() if 'norm' in n and p.requires_grad]),
         dict(norm='Sign', scale=head_radius, params=[fc_layer]),
     ]
-    optimizer = Scion(parameters, lr=lr, momentum=momentum)
+
+    precond_momentum = 1e-3
+    precond_mode = "before"
+    precond_eps = 1e-3
+
+
+
+    optimizer = Scion(parameters, lr=lr, momentum=momentum, precond_momentum=precond_momentum, precond_eps=precond_eps, precond_mode=precond_mode)
     optimizer_trainbias = optimizer
     optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], lr=lr, momentum=momentum)
 
@@ -538,6 +545,8 @@ if __name__ == "__main__":
 
         print_columns(logging_columns_list, is_head=True)
         main('warmup', model_trainbias, model_freezebias, lr=0.05, momentum=0.5)
+
+        n_trials = 3
         
         #for log2lr in np.linspace(-9, 0, 10):
         for log2lr in [math.log2(0.05)]:
@@ -549,7 +558,7 @@ if __name__ == "__main__":
             #     tags=['transfer-v1'],
             #     config={'momentum': momentum, 'log2lr': log2lr, 'method': 'scion', 'width-factor': width_factor}, reinit=True)
 
-            accs = torch.tensor([main(run, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum) for run in range(50)])
+            accs = torch.tensor([main(run, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum) for run in range(n_trials)])
             print('lr=%d width_facto=%.1f - Mean: %.4f    Std: %.4f' % (log2lr, width_factor, accs.mean(), accs.std()))
             # wandb.log({'test_acc_mean': accs.mean(), 'test_acc_std': accs.std()})
             # run.finish()
