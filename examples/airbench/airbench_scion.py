@@ -22,7 +22,7 @@ import torchvision
 import torchvision.transforms as T
 
 import wandb 
-from scion import Scion
+from scion_shampoo import Scion
 
 # ADDED
 import torch._dynamo
@@ -356,7 +356,7 @@ def evaluate(model, loader, tta_level=0):
 #                Training                  #
 ############################################
 
-def main(run, model_trainbias, model_freezebias, lr, momentum, precond_params):
+def main(run, model_trainbias, model_freezebias, lr, momentum):
     batch_size = hyp['opt']['batch_size']
     epochs = hyp['opt']['train_epochs']
     #momentum = hyp['opt']['momentum']
@@ -396,9 +396,9 @@ def main(run, model_trainbias, model_freezebias, lr, momentum, precond_params):
 
 
 
-    optimizer = Scion(parameters, lr=lr, momentum=momentum, **precond_params)
+    optimizer = Scion(parameters, lr=lr, momentum=momentum)
     optimizer_trainbias = optimizer
-    optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], lr=lr, momentum=momentum, **precond_params)
+    optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], lr=lr, momentum=momentum)
 
     # Create optimizers for frozen whiten bias stage
     model = model_freezebias
@@ -546,14 +546,14 @@ if __name__ == "__main__":
         }
 
         print_columns(logging_columns_list, is_head=True)
-        main('warmup', model_trainbias, model_freezebias, lr=0.05, momentum=0.5, precond_params=precond_params)
+        main('warmup', model_trainbias, model_freezebias, lr=0.05, momentum=0.5)
         
         #for log2lr in np.linspace(-9, 0, 10):
         log2lr =math.log2(0.05)
         momentum = 0.6
 
         # precond_momenta = np.array([0.05*i for i in range(1, 20)])
-        precond_momenta = np.array([0.001*i for i in range(5, 15)])
+        precond_momenta = np.array([0.001*i for i in range(1)])
         accs = np.zeros(len(precond_momenta))
 
         for i,precond_momentum in enumerate(precond_momenta):
@@ -564,10 +564,10 @@ if __name__ == "__main__":
             "precond_eps":1e-9,
             }
 
-            accs[i] = main(i, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum, precond_params=precond_params)
+            accs[i] = main(i, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum)
 
         
 
-        print(precond_momenta)
+        # print(precond_momenta)
         print(accs)
 
