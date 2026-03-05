@@ -356,7 +356,7 @@ def evaluate(model, loader, tta_level=0):
 #                Training                  #
 ############################################
 
-def main(run, model_trainbias, model_freezebias, lr, momentum):
+def main(run, model_trainbias, model_freezebias, lr, momentum, precond_params):
     batch_size = hyp['opt']['batch_size']
     epochs = hyp['opt']['train_epochs']
     #momentum = hyp['opt']['momentum']
@@ -394,15 +394,11 @@ def main(run, model_trainbias, model_freezebias, lr, momentum):
         dict(norm='Sign', scale=head_radius, params=[fc_layer]),
     ]
 
-    precond_momentum = 1e-3
-    precond_mode = "before"
-    precond_eps = 1e-3
 
 
-
-    optimizer = Scion(parameters, lr=lr, momentum=momentum, precond_momentum=precond_momentum, precond_eps=precond_eps, precond_mode=precond_mode)
+    optimizer = Scion(parameters, lr=lr, momentum=momentum, **precond_params)
     optimizer_trainbias = optimizer
-    optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], lr=lr, momentum=momentum)
+    optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], lr=lr, momentum=momentum, **precond_params)
 
     # Create optimizers for frozen whiten bias stage
     model = model_freezebias
@@ -543,23 +539,35 @@ if __name__ == "__main__":
         model_trainbias = torch.compile(model_trainbias)#, mode='max-autotune')
         model_freezebias = torch.compile(model_freezebias)#, mode='max-autotune')
 
-        print_columns(logging_columns_list, is_head=True)
-        main('warmup', model_trainbias, model_freezebias, lr=0.05, momentum=0.5)
+        precond_params = {
+        "precond_momentum":0.5,
+        "precond_mode":"before",
+        "precond_eps":1e-3,
+        }
 
-        n_trials = 3
+        print_columns(logging_columns_list, is_head=True)
+        main('warmup', model_trainbias, model_freezebias, lr=0.05, momentum=0.5, precond_params=precond_params)
         
         #for log2lr in np.linspace(-9, 0, 10):
-        for log2lr in [math.log2(0.05)]:
-            momentum = 0.6
-            # run = wandb.init(
-            #     project="MYPROJECT", 
-            #     entity="MYENTITY", 
-            #     name=f"v1|scion|transfer|width-factor={width_factor}|log2lr={log2lr}", 
-            #     tags=['transfer-v1'],
-            #     config={'momentum': momentum, 'log2lr': log2lr, 'method': 'scion', 'width-factor': width_factor}, reinit=True)
+        log2lr =math.log2(0.05)
+        momentum = 0.6
 
-            accs = torch.tensor([main(run, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum) for run in range(n_trials)])
-            print('lr=%d width_facto=%.1f - Mean: %.4f    Std: %.4f' % (log2lr, width_factor, accs.mean(), accs.std()))
-            # wandb.log({'test_acc_mean': accs.mean(), 'test_acc_std': accs.std()})
-            # run.finish()
+        # precond_momenta = np.array([0.05*i for i in range(1, 20)])
+        precond_momenta = np.array([0.001*i for i in range(5, 15)])
+        accs = np.zeros(len(precond_momenta))
+
+        for i,precond_momentum in enumerate(precond_momenta):
+
+            precond_params = {
+            "precond_momentum":precond_momentum,
+            "precond_mode":"before",
+            "precond_eps":1e-9,
+            }
+
+            accs[i] = main(i, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum, precond_params=precond_params)
+
+        
+
+        print(precond_momenta)
+        print(accs)
 

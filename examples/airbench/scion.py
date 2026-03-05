@@ -293,23 +293,28 @@ class Scion(torch.optim.Optimizer):
                     g = buf
 
                 if precond_mode != 'none' and precond_momentum != 1.0:
+                    g_f32 = g.float()
                     if 'precond_buffer' not in state:
-                        state['precond_buffer'] = g.detach().square().clone()
+                        state['precond_buffer'] = g_f32.detach().square().clone()
+                        state['precond_step'] = 0
+                    
                     precond_buf = state['precond_buffer']
-                    precond_buf.mul_(1 - precond_momentum).add_(g.square(), alpha=precond_momentum)
-                    # P_k  =  1 / (sqrt(v_k) + eps)   — same shape as g
-                    P = precond_buf.sqrt().add_(precond_eps).reciprocal_()
+                    state['precond_step'] += 1
+                    precond_buf.mul_(1 - precond_momentum).add_(g_f32.square(), alpha=precond_momentum)
+                    bias_correction = 1 - (1 - precond_momentum) ** state['precond_step']
+                    P = (precond_buf / bias_correction).sqrt_().add_(precond_eps).reciprocal_()
+
                 else:
                     P = None
 
                 if precond_mode == 'before':
 
-                    g_precond = g * P
-                    update = scale * norm_backend.lmo(g_precond)
+                    g_precond = g.float() * P
+                    update = scale * norm_backend.lmo(g_precond).to(g.dtype)
 
                 elif precond_mode == 'after':
 
-                    update = scale * P * norm_backend.lmo(g)
+                    update = scale * norm_backend.lmo(g) * P.to(g.dtype)
 
                 else:  # 'none'
                     update = scale * norm_backend.lmo(g)
