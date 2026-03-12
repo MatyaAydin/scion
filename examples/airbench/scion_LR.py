@@ -255,14 +255,16 @@ class Scion(torch.optim.Optimizer):
         ... }]
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
-    def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False):
+    def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
+    op="dot", beta_LR=0.99, order=4, eps=1e-4):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
             raise ValueError(f"Invalid momentum value: {momentum}")
         if norm_kwargs is None:
             norm_kwargs = {}
-        defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs)
+        defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
+        op=op, beta_LR=beta_LR, order=order, eps=eps)
         super().__init__(params, defaults)
 
     def step(self):
@@ -272,6 +274,10 @@ class Scion(torch.optim.Optimizer):
             scale = group['scale']
             unconstrained = group['unconstrained']
             norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
+            op = group["op"]
+            order = group["order"]
+            beta_LR = group["beta_LR"]
+            eps = group["eps"]
             for p in group['params']:
                 g = p.grad
                 if g is None:
@@ -285,7 +291,49 @@ class Scion(torch.optim.Optimizer):
                     buf.mul_(1-momentum).add_(g, alpha=momentum)
                     g = buf
 
-                update = scale * norm_backend.lmo(g)
+                g_2d = to_2d(g).float()
+
+                if "L_buffer" not in state.keys():
+                    if op == "hadamard":
+                        state["L_buffer"] =  torch.ones_like(g_2d)
+                        state["R_buffer"] = torch.ones_like(g_2d)
+                    
+                        # state["L_buffer"].copy_(g_2d * g_2d + 1e-4)
+                    else: # dot
+                        state["L_buffer"] = eps * torch.eye(g_2d.shape[0], g_2d.shape[0], device=g.device, dtype=g_2d.dtype)
+                        state["R_buffer"] = eps * torch.eye(g_2d.shape[1], g_2d.shape[1], device=g.device, dtype=g_2d.dtype)
+
+
+                L = state["L_buffer"]
+                R = state["R_buffer"]
+
+                # D_inv = 1. / (L + 1e-4)
+                # scaled_G = D_inv * g_2d
+
+                # print(f"g_2d stats: min={g_2d.min():.4f} max={g_2d.max():.4f} nan={g_2d.isnan().any()}")
+                # print(f"L stats:    min={L.min():.6f} max={L.max():.6f} nan={L.isnan().any()}")
+                # print(f"D_inv stats: min={D_inv.min():.2f} max={D_inv.max():.2f} nan={D_inv.isnan().any()}")
+                # print(f"scaled_G stats: min={scaled_G.min():.2f} max={scaled_G.max():.2f} nan={scaled_G.isnan().any()}")
+                # lmo_out = norm_backend.lmo(scaled_G)
+                # print(f"lmo_out stats: min={lmo_out.min():.4f} max={lmo_out.max():.4f} nan={lmo_out.isnan().any()}")
+
+
+
+                if op == "dot":
+                    L.mul_(beta_LR).add_(g_2d.matmul(g_2d.T), alpha=1 - beta_LR)
+                    R.mul_(beta_LR).add_(g_2d.T.matmul(g_2d), alpha=1 - beta_LR)
+
+                else:
+                    L.mul_(beta_LR).add_(g_2d * g_2d, alpha=1 - beta_LR)
+                    R.mul_(beta_LR).add_(g_2d * g_2d, alpha=1 - beta_LR)
+
+
+                if op == "hadamard":
+                    update = scale * weighted_norm_D_lmo(norm_backend, g_2d, L.sqrt(), eps)
+                else:
+                    update = scale * weighted_norm_LR_lmo(norm_backend, g_2d, L, R, order=order)
+                update = update.reshape(g.shape)
+
                 if not unconstrained:
                     p.data.mul_(1-lr)
                 p.data.add_(update, alpha=-lr)
@@ -298,110 +346,6 @@ class Scion(torch.optim.Optimizer):
             for p in group['params']:
                 init_func(p)
                 p.data *= scale
-
-
-class ScionLight(torch.optim.Optimizer):
-    """Memory-efficient variant of the Scion optimizer.
-    
-    This implementation saves memory by storing only the averaged gradient instead of 
-    both the gradient and its average. Note that gradients should not be zeroed since
-    p.grad is used directly to store the gradient average.
-    
-    Args:
-        params: Iterable of parameters to optimize or dicts defining parameter groups
-        lr (float, optional): Learning rate (default: 1e-3)
-        momentum (float, optional): One minus the traditional momentum factor. For example,
-            a traditional momentum of 0.9 would be specified as momentum=0.1 here (default: 1.0)
-        norm (str, optional): Choice of norm for gradient projection ('Auto', 'SpectralConv', 
-            'ColNorm', 'RowNorm', 'BiasRMS', 'Spectral', or 'Sign') (default: 'Auto')
-        norm_kwargs (dict, optional): Additional arguments for the norm projection (default: None)
-        scale (float, optional): Scale factor for updates (default: 1.0)
-        unconstrained (bool, optional): Whether to use unconstrained updates (default: False)
-    
-    Example:
-        >>> radius = 50.0
-        >>> optim_groups = [{
-        ...     'params': model.transformer.h.parameters(),
-        ...     'norm': 'Spectral',
-        ...     'norm_kwargs': {},
-        ...     'scale': radius,
-        ... }, {
-        ...     'params': model.lm_head.parameters(),
-        ...     'norm': 'Sign',
-        ...     'norm_kwargs': {},
-        ...     'scale': radius*60.0,
-        ... }]
-        >>> optimizer = ScionLight(optim_groups, lr=2**-12, momentum=0.1)
-    """
-    def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False):
-        if lr < 0.0:
-            raise ValueError(f"Invalid learning rate: {lr}")
-        if momentum < 0.0:
-            raise ValueError(f"Invalid momentum value: {momentum}")
-        if norm_kwargs is None:
-            norm_kwargs = {}
-        defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs)
-        super().__init__(params, defaults)
-        # Initialize state
-        self._store_grads_in_state()
-        # Do not pass `self` through syntactic sugar. We need the
-        # argument to not be populated.
-        self.register_state_dict_pre_hook(
-            type(self)._store_grads_in_state,
-        )
-        self.register_load_state_dict_post_hook(
-            type(self)._load_grads_from_state,
-        )
-
-    def step(self):
-        for group in self.param_groups:
-            lr = group['lr']
-            momentum = group['momentum']
-            scale = group['scale']
-            unconstrained = group['unconstrained']
-            norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
-            for p in group['params']:
-                G = p.grad
-                if G is None:
-                    continue
-
-                update = scale * norm_backend.lmo(G)
-                if not unconstrained:
-                    p.data.mul_(1-lr)
-                p.data.add_(update, alpha=-lr)
-                
-                if momentum != 1:
-                    G.mul_(1-momentum)
-
-    def init(self):
-        for group in self.param_groups:
-            norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
-            init_func = norm_backend.init
-            scale = group['scale']
-            for p in group['params']:
-                init_func(p)
-                p.data *= scale
-
-    def __getstate__(self):
-        self._store_grads_in_state()
-        return super().__getstate__()
-
-    def __setstate__(self, state):
-        super().__setstate__(state)
-        self._load_grads_from_state()
-
-    def _store_grads_in_state(self):
-        for group in self.param_groups:
-            for param in group['params']:
-                if isinstance(param, torch.Tensor) and param.grad is not None:
-                    self.state.setdefault(param, {})['grad_state'] = param.grad
-
-    def _load_grads_from_state(self):
-        for (param, state) in self.state.items():
-            if 'grad_state' in state:
-                param.grad = state['grad_state']
-            elif isinstance(param, torch.Tensor):
-                param.grad = None
 
 
 @torch.compile
@@ -432,9 +376,81 @@ def zeropower_via_newtonschulz5(G, steps=5):
     
     if G.size(0) > G.size(1):
         X = X.T
-    return X
+    return X.float()
 
 
 def zeroth_power_via_svd(G):
    U, S, V = G.svd()
    return U @ V.T
+
+def matrix_power(matrix, power):
+    """
+    From https://github.com/moskomule/shampoo.pytorch/blob/master/shampoo.py
+    """
+
+    # matrix = matrix.cpu()
+    # matrix = matrix.float()
+    u, s, v = torch.svd(matrix)
+    return (u @ s.pow_(power).diag() @ v.t())
+
+def to_2d(g):
+    """Reshape gradient to 2D: [first_dim, rest_flattened]"""
+    if g.dim() == 1:
+        return g.unsqueeze(0)   # [1, d] — treat as single row
+    return g.reshape(g.shape[0], -1)  # [d0, d1*d2*...] for conv/linear weights
+
+
+
+# def weighted_norm_LR_lmo(norm, G, L, R, order=4):
+
+#     U_L, sigma_L, _ = torch.linalg.svd(L)
+#     U_R, sigma_R, _ = torch.linalg.svd(R)
+#     for i in range(sigma_L.size(0)):
+#         sigma_L[i] = 1.0 / sigma_L[i] if sigma_L[i] > 1e-4 else 0
+#     for i in range(sigma_R.size(0)):
+#         sigma_R[i] = 1.0 / sigma_R[i] if sigma_R[i] > 1e-4 else 0
+#     L_inv = U_L @ torch.diag(sigma_L**1 / order)
+#     R_inv = torch.diag(sigma_R**1 / order) @ U_R.T
+
+#     L_inv_T = L_inv.T
+#     R_inv_T = R_inv.T
+
+#     return L_inv.matmul(norm.lmo(L_inv_T.matmul(G).matmul(R_inv_T))).matmul(R_inv)
+
+def weighted_norm_LR_lmo(norm, G, L, R, order=4, op="dot"):
+    p = 1.0 / order
+
+    U_L, sigma_L, Vh_L = torch.linalg.svd(L, full_matrices=False)
+    U_R, sigma_R, Vh_R = torch.linalg.svd(R, full_matrices=False)
+
+    # Threshold and take fractional power
+    sigma_L_inv = torch.where(sigma_L > 1e-4, sigma_L ** (-p), torch.zeros_like(sigma_L))
+    sigma_R_inv = torch.where(sigma_R > 1e-4, sigma_R ** (-p), torch.zeros_like(sigma_R))
+
+    # Correct: M^{-p} = U @ diag(sigma^{-p}) @ Vh  (for symmetric PSD, Vh = U.T)
+    L_inv = Vh_L.T @ torch.diag(sigma_L_inv) @ U_L.T   # shape [m, m]
+    R_inv = Vh_R.T @ torch.diag(sigma_R_inv) @ U_R.T   # shape [n, n]
+
+    L_inv_T = L_inv.T
+    R_inv_T = R_inv.T
+
+    return L_inv.matmul(norm.lmo(L_inv_T.matmul(G).matmul(R_inv_T))).matmul(R_inv)
+
+def weighted_norm_D_lmo(norm, G, D, eps=1e-4):
+    D_inv = 1. / (D + eps)
+    return D_inv * norm.lmo(D_inv * G)
+
+
+
+def matrix_power(matrix, power):
+    """
+    From https://github.com/moskomule/shampoo.pytorch/blob/master/shampoo.py
+    """
+
+    # matrix = matrix.cpu()
+    # matrix = matrix.float()
+    u, s, v = torch.svd(matrix)
+    return (u @ s.pow_(power).diag() @ v.t())
+
+
+

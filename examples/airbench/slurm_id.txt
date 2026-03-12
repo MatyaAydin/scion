@@ -1,0 +1,4 @@
+2802494: LR with momentum=0.95: [0.88940001]
+2802496: shampoo p=1/8: [0.91459996]
+2802497: LR with momentum=0.99:[0.9145]
+2802534: D with momentum=0.99 (init torch.ones): [0.93419999]   

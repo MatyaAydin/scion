@@ -101,6 +101,13 @@ class BiasRMS(Norm):
         g = g / (rms_values + eps)
         return g
 
+    def dual_norm(self, g):
+        return torch.sqrt(torch.mean(g ** 2, dim=0, keepdim=True))
+
+    def row_dual_norm(self, g):
+        return self.dual_norm(g)
+
+
     def init(self, g):
         return torch.nn.init.zeros_(g)
 
@@ -118,6 +125,26 @@ class SpectralConv(Norm):
             out_channels, in_channels, k, _ = g.shape
             g *= (out_channels / in_channels)**0.5 / (k ** 2)
         return g
+
+
+    def dual_norm(self, g):
+
+        # avoid issue 
+        out_channels = g.shape[0]
+        in_channels = g.shape[1]
+        k = g.shape[2]
+
+        g_2d = g.reshape(len(g), -1)
+        norm = torch.linalg.norm(g_2d, ord='nuc')
+
+        norm *= k / (out_channels / in_channels)**0.5
+
+        return norm
+
+    def row_dual_norm(self, g):
+        return torch.sum(torch.abs(g), axis=1, keepdim=True)
+        
+
     
     def init(self, w):
         w_fp = w.data.double()
@@ -184,6 +211,12 @@ class Sign(Norm):
             return (1/d_in)*torch.sign(g)    
         else:
             return torch.sign(g)
+
+    def dual_norm(self, g):
+        return torch.sum(torch.abs(g))
+
+    def row_dual_norm(self, g):
+        return torch.sum(torch.abs(g), axis=1, keepdim=True)
 
     def init(self, w):
         if self.zero_init:
@@ -255,14 +288,14 @@ class Scion(torch.optim.Optimizer):
         ... }]
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
-    def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False):
+    def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', clip_range=1., scale_type="row", norm_kwargs: dict=None, scale=1.0, unconstrained=False):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
             raise ValueError(f"Invalid momentum value: {momentum}")
         if norm_kwargs is None:
             norm_kwargs = {}
-        defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs)
+        defaults = dict(lr=lr, momentum=momentum, scale=scale, clip_range=clip_range, scale_type=scale_type, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs)
         super().__init__(params, defaults)
 
     def step(self):
@@ -271,6 +304,8 @@ class Scion(torch.optim.Optimizer):
             momentum = group['momentum']
             scale = group['scale']
             unconstrained = group['unconstrained']
+            clip_range = group["clip_range"]
+            scale_type = group["scale_type"]
             norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
             for p in group['params']:
                 g = p.grad
@@ -285,7 +320,16 @@ class Scion(torch.optim.Optimizer):
                     buf.mul_(1-momentum).add_(g, alpha=momentum)
                     g = buf
 
-                update = scale * norm_backend.lmo(g)
+                if 'precond_buffer' not in state.keys():
+                    state['precond_buffer'] = 
+
+                if scale_type == "grad":
+                    dual_norm = norm_backend.dual_norm(g.float())
+                    update = scale * norm_backend.lmo(g).float() * torch.clip(dual_norm, min=None, max=clip_range)
+                else:
+                    dual_norm = norm_backend.row_dual_norm(g)
+                    update = scale * torch.clip(dual_norm, min=None, max=clip_range) *  norm_backend.lmo(g)
+
                 if not unconstrained:
                     p.data.mul_(1-lr)
                 p.data.add_(update, alpha=-lr)
@@ -298,110 +342,6 @@ class Scion(torch.optim.Optimizer):
             for p in group['params']:
                 init_func(p)
                 p.data *= scale
-
-
-class ScionLight(torch.optim.Optimizer):
-    """Memory-efficient variant of the Scion optimizer.
-    
-    This implementation saves memory by storing only the averaged gradient instead of 
-    both the gradient and its average. Note that gradients should not be zeroed since
-    p.grad is used directly to store the gradient average.
-    
-    Args:
-        params: Iterable of parameters to optimize or dicts defining parameter groups
-        lr (float, optional): Learning rate (default: 1e-3)
-        momentum (float, optional): One minus the traditional momentum factor. For example,
-            a traditional momentum of 0.9 would be specified as momentum=0.1 here (default: 1.0)
-        norm (str, optional): Choice of norm for gradient projection ('Auto', 'SpectralConv', 
-            'ColNorm', 'RowNorm', 'BiasRMS', 'Spectral', or 'Sign') (default: 'Auto')
-        norm_kwargs (dict, optional): Additional arguments for the norm projection (default: None)
-        scale (float, optional): Scale factor for updates (default: 1.0)
-        unconstrained (bool, optional): Whether to use unconstrained updates (default: False)
-    
-    Example:
-        >>> radius = 50.0
-        >>> optim_groups = [{
-        ...     'params': model.transformer.h.parameters(),
-        ...     'norm': 'Spectral',
-        ...     'norm_kwargs': {},
-        ...     'scale': radius,
-        ... }, {
-        ...     'params': model.lm_head.parameters(),
-        ...     'norm': 'Sign',
-        ...     'norm_kwargs': {},
-        ...     'scale': radius*60.0,
-        ... }]
-        >>> optimizer = ScionLight(optim_groups, lr=2**-12, momentum=0.1)
-    """
-    def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False):
-        if lr < 0.0:
-            raise ValueError(f"Invalid learning rate: {lr}")
-        if momentum < 0.0:
-            raise ValueError(f"Invalid momentum value: {momentum}")
-        if norm_kwargs is None:
-            norm_kwargs = {}
-        defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs)
-        super().__init__(params, defaults)
-        # Initialize state
-        self._store_grads_in_state()
-        # Do not pass `self` through syntactic sugar. We need the
-        # argument to not be populated.
-        self.register_state_dict_pre_hook(
-            type(self)._store_grads_in_state,
-        )
-        self.register_load_state_dict_post_hook(
-            type(self)._load_grads_from_state,
-        )
-
-    def step(self):
-        for group in self.param_groups:
-            lr = group['lr']
-            momentum = group['momentum']
-            scale = group['scale']
-            unconstrained = group['unconstrained']
-            norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
-            for p in group['params']:
-                G = p.grad
-                if G is None:
-                    continue
-
-                update = scale * norm_backend.lmo(G)
-                if not unconstrained:
-                    p.data.mul_(1-lr)
-                p.data.add_(update, alpha=-lr)
-                
-                if momentum != 1:
-                    G.mul_(1-momentum)
-
-    def init(self):
-        for group in self.param_groups:
-            norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
-            init_func = norm_backend.init
-            scale = group['scale']
-            for p in group['params']:
-                init_func(p)
-                p.data *= scale
-
-    def __getstate__(self):
-        self._store_grads_in_state()
-        return super().__getstate__()
-
-    def __setstate__(self, state):
-        super().__setstate__(state)
-        self._load_grads_from_state()
-
-    def _store_grads_in_state(self):
-        for group in self.param_groups:
-            for param in group['params']:
-                if isinstance(param, torch.Tensor) and param.grad is not None:
-                    self.state.setdefault(param, {})['grad_state'] = param.grad
-
-    def _load_grads_from_state(self):
-        for (param, state) in self.state.items():
-            if 'grad_state' in state:
-                param.grad = state['grad_state']
-            elif isinstance(param, torch.Tensor):
-                param.grad = None
 
 
 @torch.compile

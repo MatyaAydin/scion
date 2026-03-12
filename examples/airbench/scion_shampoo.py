@@ -288,8 +288,8 @@ class Scion(torch.optim.Optimizer):
                 g_2d = to_2d(g).float()
 
                 if "L_buffer" not in state.keys():
-                    state["L_buffer"] = 1e-6 * torch.eye(g_2d.shape[0], g_2d.shape[0], device=g.device, dtype=g_2d.dtype)
-                    state["R_buffer"] = 1e-6 * torch.eye(g_2d.shape[1], g_2d.shape[1], device=g.device, dtype=g_2d.dtype)
+                    state["L_buffer"] = 1e-4 * torch.eye(g_2d.shape[0], g_2d.shape[0], device=g.device, dtype=g_2d.dtype)
+                    state["R_buffer"] = 1e-4 * torch.eye(g_2d.shape[1], g_2d.shape[1], device=g.device, dtype=g_2d.dtype)
 
                 L = state["L_buffer"]
                 R = state["R_buffer"]
@@ -297,8 +297,8 @@ class Scion(torch.optim.Optimizer):
                 L.add_(g_2d.matmul(g_2d.T))
                 R.add_(g_2d.T.matmul(g_2d))
 
-                L_pow = matrix_power(L, -1/4)
-                R_pow = matrix_power(R, -1/4)
+                L_pow = matrix_power(L, -1/8)
+                R_pow = matrix_power(R, -1/8)
 
 
                 update = scale * L_pow.matmul(norm_backend.lmo(L_pow.matmul(g_2d).matmul(R_pow))).matmul(R_pow)

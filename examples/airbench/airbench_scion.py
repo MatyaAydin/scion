@@ -13,6 +13,7 @@ import sys
 import uuid
 import math
 from math import ceil
+import matplotlib.pyplot as plt
 
 import numpy as np
 import torch
@@ -22,7 +23,8 @@ import torchvision
 import torchvision.transforms as T
 
 import wandb 
-from scion_shampoo import Scion
+import optuna
+from scion_steepest import Scion
 
 # ADDED
 import torch._dynamo
@@ -356,7 +358,7 @@ def evaluate(model, loader, tta_level=0):
 #                Training                  #
 ############################################
 
-def main(run, model_trainbias, model_freezebias, lr, momentum):
+def main(run, model_trainbias, model_freezebias, lr, momentum, extra_params, radius=8.0):
     batch_size = hyp['opt']['batch_size']
     epochs = hyp['opt']['train_epochs']
     #momentum = hyp['opt']['momentum']
@@ -385,7 +387,7 @@ def main(run, model_trainbias, model_freezebias, lr, momentum):
     first_layer = model._orig_mod[0].weight
     fc_layer = model._orig_mod[-2].weight
     whiten_bias = model._orig_mod[0].bias
-    radius = 8.0
+    radius = 8.
     head_radius = 128
     parameters = [
         dict(norm="SpectralConv", norm_kwargs={'steps': 9}, scale=radius, params=[first_layer]),
@@ -396,15 +398,14 @@ def main(run, model_trainbias, model_freezebias, lr, momentum):
 
 
 
-    optimizer = Scion(parameters, lr=lr, momentum=momentum)
+    optimizer = Scion(parameters, lr=lr, momentum=momentum, **extra_params)
     optimizer_trainbias = optimizer
-    optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], lr=lr, momentum=momentum)
+    optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], lr=lr, momentum=momentum, **extra_params)
 
     # Create optimizers for frozen whiten bias stage
     model = model_freezebias
     first_layer = model._orig_mod[0].weight
     fc_layer = model._orig_mod[-2].weight
-    radius = 8.0
     head_radius = 128
     parameters = [
         dict(norm="SpectralConv", norm_kwargs={'steps': 9}, scale=radius, params=[first_layer]),
@@ -412,7 +413,7 @@ def main(run, model_trainbias, model_freezebias, lr, momentum):
         dict(norm='BiasRMS', scale=radius, params=[p for n, p in model.named_parameters() if 'norm' in n and p.requires_grad]),
         dict(norm='Sign', scale=head_radius, params=[fc_layer]),
     ]
-    optimizer = Scion(parameters, lr=lr, momentum=momentum)
+    optimizer = Scion(parameters, lr=lr, momentum=momentum, **extra_params)
     optimizer_freezebias = optimizer
 
     # Make learning rate schedulers for all 5 optimizers
@@ -445,6 +446,8 @@ def main(run, model_trainbias, model_freezebias, lr, momentum):
     # for k,v in norm_logging.log_spectral_norms(model).items():
     #     print(f"{k}: {v}")
 
+    loss_history = np.zeros(ceil(epochs))
+
     for epoch in range(ceil(epochs)):
 
         # After training the whiten bias for some epochs, swap in the compiled model with frozen bias
@@ -469,10 +472,13 @@ def main(run, model_trainbias, model_freezebias, lr, momentum):
 
         starter.record()
 
+        epoch_loss = 0.
+
         model.train()
         for inputs, labels in train_loader:
             outputs = model(inputs)
             loss = loss_fn(outputs, labels).sum()
+            epoch_loss += loss.item()
             model.zero_grad(set_to_none=True)
             loss.backward()
             for opt, sched in zip(optimizers, schedulers):
@@ -481,6 +487,8 @@ def main(run, model_trainbias, model_freezebias, lr, momentum):
             current_steps += 1
             if current_steps >= total_train_steps:
                 break
+
+        loss_history[epoch] = epoch_loss / len(train_loader)
 
         ender.record()
         torch.cuda.synchronize()
@@ -514,7 +522,7 @@ def main(run, model_trainbias, model_freezebias, lr, momentum):
     # for k,v in norm_logging.log_spectral_norms(model).items():
     #     print(f"{k}: {v}")
 
-    return tta_val_acc
+    return tta_val_acc, loss_history
 
 
 #######################################################
@@ -539,35 +547,60 @@ if __name__ == "__main__":
         model_trainbias = torch.compile(model_trainbias)#, mode='max-autotune')
         model_freezebias = torch.compile(model_freezebias)#, mode='max-autotune')
 
-        precond_params = {
-        "precond_momentum":0.5,
-        "precond_mode":"before",
-        "precond_eps":1e-3,
+        extra_params = {
+        # "op":"hadamard",
+        # "beta_LR":0.99,
+        # "order":8,
+        # "eps": 1e-4
         }
 
         print_columns(logging_columns_list, is_head=True)
-        main('warmup', model_trainbias, model_freezebias, lr=0.05, momentum=0.5)
+        main('warmup', model_trainbias, model_freezebias, lr=0.05, momentum=0.5, extra_params=extra_params)
+
+        def objective(trial):
+            # can add eps
+            lr = trial.suggest_float("lr", 5*1e-4, 1e-2, log=True)
+            momentum = trial.suggest_float("momentum", 0., 1.)
+            extra_params = {
+                "clip_range": trial.suggest_float("clip_range", 1e-1, 10, log=True)
+            }
+            # radius = trial.suggest_float("radius", 1., 8.)
+            acc, _ = main("train", model_trainbias, model_freezebias, lr=lr, momentum=momentum, extra_params=extra_params)
+            return acc
         
         #for log2lr in np.linspace(-9, 0, 10):
         log2lr =math.log2(0.05)
         momentum = 0.6
 
-        # precond_momenta = np.array([0.05*i for i in range(1, 20)])
-        precond_momenta = np.array([0.001*i for i in range(1)])
-        accs = np.zeros(len(precond_momenta))
+        # n_trials = 1
 
-        for i,precond_momentum in enumerate(precond_momenta):
+        betas = []
+        # momentum = 0.2771689896565529
 
-            precond_params = {
-            "precond_momentum":precond_momentum,
-            "precond_mode":"before",
-            "precond_eps":1e-9,
+        accs = np.zeros(len(betas))
+
+        for i,beta in enumerate(betas):
+
+            extra_params = {
+            # "op":"hadamard",
+            # "beta_LR":beta,
+            # "eps":1e-9,
+            # "order":8
             }
 
-            accs[i] = main(i, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum)
+            accs[i], loss_history = main(i, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum, extra_params=extra_params)
+
+            plt.plot(range(ceil(hyp['opt']['train_epochs'])), loss_history)
+            plt.savefig("./plots/loss.png")
+
 
         
-
-        # print(precond_momenta)
-        print(accs)
+        study = optuna.create_study(direction="maximize")
+        study.optimize(objective, n_trials=250, n_jobs=1)
+        print("Best trial:")
+        trial = study.best_trial
+        print(f"Value: {trial.value}")
+        print("Params:")
+        for key, value in trial.params.items():
+            print(f"    {key}: {value}")
 

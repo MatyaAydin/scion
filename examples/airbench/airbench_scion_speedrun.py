@@ -48,7 +48,7 @@ hyp = {
     },
     'opt': {
         'svd_backend': 'newton',
-        'train_epochs': 8,
+        'train_epochs': 80,
         'batch_size': 2000,
         'lr': 6.5,                 # learning rate per 1024 examples
         'momentum': 0.85,
@@ -549,7 +549,7 @@ if __name__ == "__main__":
             #     tags=['transfer-v1'],
             #     config={'momentum': momentum, 'log2lr': log2lr, 'method': 'scion', 'width-factor': width_factor}, reinit=True)
 
-            accs = torch.tensor([main(run, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum) for run in range(200)])
+            accs = torch.tensor([main(run, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum) for run in range(1)])
             print('lr=%d width_facto=%.1f - Mean: %.4f    Std: %.4f' % (log2lr, width_factor, accs.mean(), accs.std()))
             # wandb.log({'test_acc_mean': accs.mean(), 'test_acc_std': accs.std()})
             # run.finish()
