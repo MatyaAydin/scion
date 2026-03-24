@@ -226,7 +226,7 @@ norm_dict = {
 }
 
 
-class Scion(torch.optim.Optimizer):
+class ScionSteepest(torch.optim.Optimizer):
     """Scion optimizer implementation.
 
     Args:
@@ -256,7 +256,7 @@ class Scion(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-    op="dot", beta_LR=0.99, order=4, eps=1e-4):
+    op="hadamard", beta_LR=0.999, order=4, eps=1e-8):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -266,6 +266,8 @@ class Scion(torch.optim.Optimizer):
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
         op=op, beta_LR=beta_LR, order=order, eps=eps)
         super().__init__(params, defaults)
+        self.dual_norm = 0.
+        self.preconditioner_norm = 0.
 
     def step(self):
         for group in self.param_groups:
@@ -307,11 +309,13 @@ class Scion(torch.optim.Optimizer):
                 L = state["L_buffer"]
                 R = state["R_buffer"]
 
+                self.preconditioner_norm = torch.linalg.norm(L, 'fro')
+
                 # D_inv = 1. / (L + 1e-4)
                 # scaled_G = D_inv * g_2d
 
                 # print(f"g_2d stats: min={g_2d.min():.4f} max={g_2d.max():.4f} nan={g_2d.isnan().any()}")
-                # print(f"L stats:    min={L.min():.6f} max={L.max():.6f} nan={L.isnan().any()}")
+                # print(f"L stats:    min={L.min():.6f} max={L.max():.6f} nan={L.isnan().any()}, norm={torch.linalg.norm(L, 'fro')}")
                 # print(f"D_inv stats: min={D_inv.min():.2f} max={D_inv.max():.2f} nan={D_inv.isnan().any()}")
                 # print(f"scaled_G stats: min={scaled_G.min():.2f} max={scaled_G.max():.2f} nan={scaled_G.isnan().any()}")
                 # lmo_out = norm_backend.lmo(scaled_G)
@@ -329,9 +333,13 @@ class Scion(torch.optim.Optimizer):
 
 
                 if op == "hadamard":
-                    update = scale * weighted_norm_D_lmo(norm_backend, g_2d, L.sqrt(), eps)
+                    lmo_ = weighted_norm_D_lmo(norm_backend, g_2d, L.sqrt(), eps)
+                    dual_norm = (lmo_ * g_2d).sum()
+                    self.dual_norm = dual_norm
+                    update = scale * lmo_ * dual_norm
                 else:
-                    update = scale * weighted_norm_LR_lmo(norm_backend, g_2d, L, R, order=order)
+                    self.dual_norm = 0.
+                    update = scale / (L.sum()) * weighted_norm_LR_lmo(norm_backend, g_2d, L, R, order=order)
                 update = update.reshape(g.shape)
 
                 if not unconstrained:

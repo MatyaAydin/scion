@@ -14,6 +14,7 @@ import os
 import sys
 import uuid
 from math import ceil
+import numpy as np
 
 import torch
 from torch import nn
@@ -519,6 +520,8 @@ def main(run, model_trainbias, model_freezebias):
     torch.cuda.synchronize()
     total_time_seconds += 1e-3 * starter.elapsed_time(ender)
 
+    loss_history = []
+
     for epoch in range(ceil(epochs)):
 
         # After training the whiten bias for some epochs, swap in the compiled model with frozen bias
@@ -549,6 +552,8 @@ def main(run, model_trainbias, model_freezebias):
             loss = loss_fn(outputs, labels).sum()
             model.zero_grad(set_to_none=True)
             loss.backward()
+
+            loss_history.append(loss.item())
             for opt, sched in zip(optimizers, schedulers):
                 opt.step()
                 sched.step()
@@ -584,7 +589,7 @@ def main(run, model_trainbias, model_freezebias):
     epoch = 'eval'
     print_training_details(locals(), is_final_entry=True)
 
-    return tta_val_acc
+    return tta_val_acc, np.array(loss_history)
 
 if __name__ == "__main__":
     with open(sys.argv[0]) as f:
@@ -603,12 +608,6 @@ if __name__ == "__main__":
 
     print_columns(logging_columns_list, is_head=True)
     main('warmup', model_trainbias, model_freezebias)
-    accs = torch.tensor([main(run, model_trainbias, model_freezebias) for run in range(hyp['meta']['runs'])])
-    print('Mean: %.4f    Std: %.4f' % (accs.mean(), accs.std()))
+    accs, loss = main("train", model_trainbias, model_freezebias)
 
-    log = {'code': code, 'accs': accs}
-    log_dir = os.path.join('logs', str(uuid.uuid4()))
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, 'log.pt')
-    print(os.path.abspath(log_path))
-    torch.save(log, os.path.join(log_dir, 'log.pt'))
+    np.save("./loss/muon_loss.npy", loss)

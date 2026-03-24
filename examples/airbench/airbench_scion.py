@@ -14,6 +14,8 @@ import uuid
 import math
 from math import ceil
 import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set_theme()
 
 import numpy as np
 import torch
@@ -24,7 +26,10 @@ import torchvision.transforms as T
 
 import wandb 
 import optuna
-from scion_steepest import Scion
+from scion_LR import ScionSteepest
+from scion import Scion
+
+from torch.optim import AdamW, SGD
 
 # ADDED
 import torch._dynamo
@@ -50,7 +55,7 @@ hyp = {
     },
     'opt': {
         'svd_backend': 'newton',
-        'train_epochs': 8,
+        'train_epochs': 25,
         'batch_size': 2000,
         'lr': 6.5,                 # learning rate per 1024 examples
         'momentum': 0.85,
@@ -358,7 +363,7 @@ def evaluate(model, loader, tta_level=0):
 #                Training                  #
 ############################################
 
-def main(run, model_trainbias, model_freezebias, lr, momentum, extra_params, radius=8.0):
+def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="scion_steepest", radius=8.0):
     batch_size = hyp['opt']['batch_size']
     epochs = hyp['opt']['train_epochs']
     #momentum = hyp['opt']['momentum']
@@ -389,39 +394,83 @@ def main(run, model_trainbias, model_freezebias, lr, momentum, extra_params, rad
     whiten_bias = model._orig_mod[0].bias
     radius = 8.
     head_radius = 128
-    parameters = [
-        dict(norm="SpectralConv", norm_kwargs={'steps': 9}, scale=radius, params=[first_layer]),
-        dict(norm='SpectralConv', norm_kwargs={'steps': 9}, scale=radius, params=[p for n, p in model.named_parameters() if len(p.shape) == 4 and p.requires_grad and "0.weight" not in n]),
-        dict(norm='BiasRMS', scale=radius, params=[p for n, p in model.named_parameters() if 'norm' in n and p.requires_grad]),
-        dict(norm='Sign', scale=head_radius, params=[fc_layer]),
-    ]
+
+    if "scion" in optimizer_name:
+
+        parameters = [
+            dict(norm="SpectralConv", norm_kwargs={'steps': 9}, scale=radius, params=[first_layer]),
+            dict(norm='SpectralConv', norm_kwargs={'steps': 9}, scale=radius, params=[p for n, p in model.named_parameters() if len(p.shape) == 4 and p.requires_grad and "0.weight" not in n]),
+            dict(norm='BiasRMS', scale=radius, params=[p for n, p in model.named_parameters() if 'norm' in n and p.requires_grad]),
+            dict(norm='Sign', scale=head_radius, params=[fc_layer]),
+        ]
 
 
 
-    optimizer = Scion(parameters, lr=lr, momentum=momentum, **extra_params)
-    optimizer_trainbias = optimizer
-    optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], lr=lr, momentum=momentum, **extra_params)
+        optimizer = Scion(parameters, **extra_params) if optimizer_name == "scion" else ScionSteepest(parameters, **extra_params)
+        optimizer_trainbias = optimizer
+        optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], **extra_params) if optimizer_name == "scion" else ScionSteepest(norm='BiasRMS', scale=radius, params=[whiten_bias], **extra_params) 
 
-    # Create optimizers for frozen whiten bias stage
-    model = model_freezebias
-    first_layer = model._orig_mod[0].weight
-    fc_layer = model._orig_mod[-2].weight
-    head_radius = 128
-    parameters = [
-        dict(norm="SpectralConv", norm_kwargs={'steps': 9}, scale=radius, params=[first_layer]),
-        dict(norm='SpectralConv', norm_kwargs={'steps': 9}, scale=radius, params=[p for n, p in model.named_parameters() if len(p.shape) == 4 and p.requires_grad and "0.weight" not in n]),
-        dict(norm='BiasRMS', scale=radius, params=[p for n, p in model.named_parameters() if 'norm' in n and p.requires_grad]),
-        dict(norm='Sign', scale=head_radius, params=[fc_layer]),
-    ]
-    optimizer = Scion(parameters, lr=lr, momentum=momentum, **extra_params)
-    optimizer_freezebias = optimizer
+        # Create optimizers for frozen whiten bias stage
+        model = model_freezebias
+        first_layer = model._orig_mod[0].weight
+        fc_layer = model._orig_mod[-2].weight
+        head_radius = 128
+        parameters = [
+            dict(norm="SpectralConv", norm_kwargs={'steps': 9}, scale=radius, params=[first_layer]),
+            dict(norm='SpectralConv', norm_kwargs={'steps': 9}, scale=radius, params=[p for n, p in model.named_parameters() if len(p.shape) == 4 and p.requires_grad and "0.weight" not in n]),
+            dict(norm='BiasRMS', scale=radius, params=[p for n, p in model.named_parameters() if 'norm' in n and p.requires_grad]),
+            dict(norm='Sign', scale=head_radius, params=[fc_layer]),
+        ]
+        optimizer = Scion(parameters, **extra_params) if optimizer_name == "scion" else ScionSteepest(parameters, **extra_params)
+        optimizer_freezebias = optimizer
 
-    # Make learning rate schedulers for all 5 optimizers
-    def get_lr(step):
-        return 1 - step / total_train_steps
-    scheduler_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer_trainbias, get_lr)
-    scheduler2_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer2_trainbias, get_lr)
-    scheduler_freezebias = torch.optim.lr_scheduler.LambdaLR(optimizer_freezebias, get_lr)
+        def custom_scheduler(optimizer, warmup_steps, constant_steps, total_steps):
+            def lr_lambda(current_step):
+                if current_step < warmup_steps:
+                    # Linear warmup
+                    return current_step / warmup_steps
+                elif current_step < warmup_steps + constant_steps:
+                    # Constant phase
+                    return 1.0
+                else:
+                    # Linear decay to 0
+                    decay_steps = total_steps - warmup_steps - constant_steps
+                    steps_into_decay = current_step - warmup_steps - constant_steps
+                    return max(0.0, 1.0 - steps_into_decay / decay_steps)
+
+            return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+        # Make learning rate schedulers for all 5 optimizers
+        def get_lr(step):
+            return 1 - step / total_train_steps
+        scheduler_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer_trainbias, get_lr)
+        scheduler2_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer2_trainbias, get_lr)
+        scheduler_freezebias = torch.optim.lr_scheduler.LambdaLR(optimizer_freezebias, get_lr)
+
+        # scheduler_trainbias = custom_scheduler(optimizer_trainbias, warmup_steps=int(0.3 * total_train_steps), constant_steps=int(0.4 * total_train_steps),  total_steps=total_train_steps)
+        # scheduler2_trainbias = custom_scheduler(optimizer2_trainbias, warmup_steps=int(0.3 * total_train_steps), constant_steps=int(0.4 * total_train_steps),  total_steps=total_train_steps)
+        # scheduler_freezebias = custom_scheduler(optimizer_freezebias, warmup_steps=int(0.3 * total_train_steps), constant_steps=int(0.4 * total_train_steps),  total_steps=total_train_steps)
+
+
+    else:
+
+        all_params = [p for p in model.parameters() if p.requires_grad]
+        
+        optimizer_trainbias = SGD(all_params, **extra_params)
+        optimizer2_trainbias = SGD([whiten_bias], **extra_params)
+        
+        # freezebias model params
+        model = model_freezebias
+        all_params_freeze = [p for p in model.parameters() if p.requires_grad]
+        optimizer_freezebias = SGD(all_params_freeze, **extra_params)
+        model = model_trainbias  # reset model ref back
+
+        def get_lr(step):
+            return 1 - step / total_train_steps
+        scheduler_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer_trainbias, get_lr)
+        scheduler2_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer2_trainbias, get_lr)
+        scheduler_freezebias = torch.optim.lr_scheduler.LambdaLR(optimizer_freezebias, get_lr)
+
 
     # Reinitialize the network from scratch - nothing is reused from previous runs besides the PyTorch compilation
     reinit_net(model_trainbias)
@@ -446,7 +495,9 @@ def main(run, model_trainbias, model_freezebias, lr, momentum, extra_params, rad
     # for k,v in norm_logging.log_spectral_norms(model).items():
     #     print(f"{k}: {v}")
 
-    loss_history = np.zeros(ceil(epochs))
+    loss_history = []
+    dual_norm_history = []
+
 
     for epoch in range(ceil(epochs)):
 
@@ -472,23 +523,28 @@ def main(run, model_trainbias, model_freezebias, lr, momentum, extra_params, rad
 
         starter.record()
 
-        epoch_loss = 0.
+        dual_norm_epoch = 0.
 
         model.train()
         for inputs, labels in train_loader:
             outputs = model(inputs)
             loss = loss_fn(outputs, labels).sum()
-            epoch_loss += loss.item()
             model.zero_grad(set_to_none=True)
             loss.backward()
+
+            loss_history.append(loss.item())
             for opt, sched in zip(optimizers, schedulers):
                 opt.step()
                 sched.step()
+                if isinstance(opt, ScionSteepest):
+                    dual_norm_epoch += opt.preconditioner_norm.item()
+
             current_steps += 1
             if current_steps >= total_train_steps:
                 break
 
-        loss_history[epoch] = epoch_loss / len(train_loader)
+        dual_norm_history.append(dual_norm_epoch / len(train_loader))
+
 
         ender.record()
         torch.cuda.synchronize()
@@ -509,6 +565,13 @@ def main(run, model_trainbias, model_freezebias, lr, momentum, extra_params, rad
     #  TTA Evaluation  #
     ####################
 
+    if optimizer_name == "scion_steepest":
+        plt.plot(range(len(dual_norm_history)), np.array(dual_norm_history))
+        plt.xlabel("Epoch")
+        plt.ylabel("Value")
+        plt.title("Preconditioner norm value")
+        plt.savefig("./plots/precond_norm.png")
+
     starter.record()
     tta_val_acc = evaluate(model, test_loader, tta_level=hyp['net']['tta_level'])
     ender.record()
@@ -518,11 +581,8 @@ def main(run, model_trainbias, model_freezebias, lr, momentum, extra_params, rad
     epoch = 'eval'
     print_training_details(locals(), is_final_entry=True)
 
-    # import norm_logging
-    # for k,v in norm_logging.log_spectral_norms(model).items():
-    #     print(f"{k}: {v}")
 
-    return tta_val_acc, loss_history
+    return tta_val_acc, np.array(loss_history)
 
 
 #######################################################
@@ -548,14 +608,12 @@ if __name__ == "__main__":
         model_freezebias = torch.compile(model_freezebias)#, mode='max-autotune')
 
         extra_params = {
-        # "op":"hadamard",
-        # "beta_LR":0.99,
-        # "order":8,
-        # "eps": 1e-4
+            "lr": 3*1e-4
+        
         }
 
         print_columns(logging_columns_list, is_head=True)
-        main('warmup', model_trainbias, model_freezebias, lr=0.05, momentum=0.5, extra_params=extra_params)
+        main('warmup', model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="sgd")
 
         def objective(trial):
             # can add eps
@@ -565,42 +623,50 @@ if __name__ == "__main__":
                 "clip_range": trial.suggest_float("clip_range", 1e-1, 10, log=True)
             }
             # radius = trial.suggest_float("radius", 1., 8.)
-            acc, _ = main("train", model_trainbias, model_freezebias, lr=lr, momentum=momentum, extra_params=extra_params)
+            acc, _ = main("train", model_trainbias, model_freezebias, lr=lr, extra_params=extra_params, optimizer_name="sgd")
             return acc
         
         #for log2lr in np.linspace(-9, 0, 10):
         log2lr =math.log2(0.05)
         momentum = 0.6
 
-        # n_trials = 1
 
-        betas = []
-        # momentum = 0.2771689896565529
+        sgd_params = {
+            "lr":3*1e-4,
+            "nesterov":True,
+            "momentum": 0.85
 
-        accs = np.zeros(len(betas))
+        }
+        scion_params = {
+            "lr":2**log2lr,
+            "momentum": momentum
 
-        for i,beta in enumerate(betas):
+        }
+        scion_steepest_params = {
+            "lr":5*1e-4,
+            "momentum": momentum
 
-            extra_params = {
-            # "op":"hadamard",
-            # "beta_LR":beta,
-            # "eps":1e-9,
-            # "order":8
-            }
+        }
 
-            accs[i], loss_history = main(i, model_trainbias, model_freezebias, lr=2**log2lr, momentum=momentum, extra_params=extra_params)
+        optimizers = {
+            # "sgd":sgd_params,
+            # "scion":scion_params,
+            "scion_steepest":scion_steepest_params
+        }
 
-            plt.plot(range(ceil(hyp['opt']['train_epochs'])), loss_history)
-            plt.savefig("./plots/loss.png")
+        for optim in optimizers.keys():
 
+            print(f"{'='*30} {optim} {'='*30}")
+            accs, loss_history = main(1, model_trainbias, model_freezebias, extra_params=optimizers[optim], optimizer_name=optim)
 
-        
-        study = optuna.create_study(direction="maximize")
-        study.optimize(objective, n_trials=250, n_jobs=1)
-        print("Best trial:")
-        trial = study.best_trial
-        print(f"Value: {trial.value}")
-        print("Params:")
-        for key, value in trial.params.items():
-            print(f"    {key}: {value}")
+        #     plt.plot(range(len(loss_history)), loss_history, label=optim)
+
+        # loss_muon = np.load("./loss/muon_loss.npy")
+        # plt.plot(range(len(loss_muon)), loss_muon, label="muon")
+
+        # plt.legend(loc="upper right")
+        # plt.xlabel("Iteration")
+        # plt.ylabel("Loss")
+        # plt.savefig("./plots/loss.png")
+
 

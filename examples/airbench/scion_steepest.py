@@ -288,7 +288,7 @@ class Scion(torch.optim.Optimizer):
         ... }]
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
-    def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', clip_range=1., scale_type="row", norm_kwargs: dict=None, scale=1.0, unconstrained=False):
+    def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', clip_range=1., scale_type="grad", norm_kwargs: dict=None, scale=1.0, unconstrained=False):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -307,6 +307,8 @@ class Scion(torch.optim.Optimizer):
             clip_range = group["clip_range"]
             scale_type = group["scale_type"]
             norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
+            precond_momentum = 0.999
+            eps = 1e-4
             for p in group['params']:
                 g = p.grad
                 if g is None:
@@ -320,15 +322,40 @@ class Scion(torch.optim.Optimizer):
                     buf.mul_(1-momentum).add_(g, alpha=momentum)
                     g = buf
 
+                g_float = g.float()
+
                 if 'precond_buffer' not in state.keys():
-                    state['precond_buffer'] = 
+                    state['precond_buffer'] = torch.clone(g_float).square()
 
                 if scale_type == "grad":
-                    dual_norm = norm_backend.dual_norm(g.float())
-                    update = scale * norm_backend.lmo(g).float() * torch.clip(dual_norm, min=None, max=clip_range)
+                    lmo_ = norm_backend.lmo(g)
+                    dual_norm = (lmo_.float() * g_float).sum()
+                    precond_buf = state['precond_buffer']
+                    precond_buf.mul_(precond_momentum).add_(g_float.square(), alpha=1. - precond_momentum)
+                    P = precond_buf.sqrt().add(eps).reciprocal()
+                    update = (scale * dual_norm * P * lmo_.float()).to(g.dtype)
+
+                    print(f"g dtype: {g.dtype}, precond_buf dtype: {precond_buf.dtype}")
+                    print(f"g: norm={g.norm():.4f}")
+                    print(f"lmo_: min={lmo_.min():.4f} max={lmo_.max():.4f}")
+                    print(f" row-wise dual norm: min={dual_norm.min():.4f} max={dual_norm.max():.4f} has_inf={dual_norm.isinf().any()}")
+                    print(f"P: min={P.min():.4f} max={P.max():.4f} has_inf={P.isinf().any()}")
+                    print(f"P*lmo_: min={(P.to(g.dtype)*lmo_).min():.4f} max={(P.to(g.dtype)*lmo_).max():.4f}")
+                    print(f"dual_norm*P*lmo_: norm={(dual_norm * P.to(g.dtype) * lmo_).norm():.4f}")
+                    print(f"update norm: {update.norm():.4f}")
+                    print(f"p.data norm: {p.data.norm():.4f}")
+                    print("---")
+
+
                 else:
+                    lmo_ = norm_backend.lmo(g)
                     dual_norm = norm_backend.row_dual_norm(g)
-                    update = scale * torch.clip(dual_norm, min=None, max=clip_range) *  norm_backend.lmo(g)
+                    precond_buf = state['precond_buffer']
+                    precond_buf.mul_(precond_momentum).add_(g_float.square(), alpha=1. - precond_momentum)
+                    P = precond_buf.sqrt().add(eps).reciprocal()
+                    update = (scale * dual_norm * P * lmo_.float()).to(g.dtype)
+
+
 
                 if not unconstrained:
                     p.data.mul_(1-lr)
