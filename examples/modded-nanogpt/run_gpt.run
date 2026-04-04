@@ -10,6 +10,4 @@
 #SBATCH --output=result_%j.out      # Standard output file (%j expands to jobID)
 #SBATCH --error=error_%j.err
 
-source /users/maydin/scion/examples/modded-nanogpt/venv/bin/activate
-
 torchrun --standalone --nproc_per_node=4 train_gpt_scion.py
