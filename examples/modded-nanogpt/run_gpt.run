@@ -12,6 +12,4 @@
 
 source /users/maydin/scion/examples/modded-nanogpt/venv/bin/activate
 
-python3 data/cached_fineweb10B.py 8
-
 torchrun --standalone --nproc_per_node=4 train_gpt_scion.py
