@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=project_name
+#SBATCH --job-name=train_modded_gpt
 #SBATCH --time=01:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
