@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH --job-name=project_name
+#SBATCH --time=01:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=288
+#SBATCH --environment=vllm2026-container
+#SBATCH --account=a0114
+#SBATCH --gpus-per-node=4
+#SBATCH --output=result_%j.out      # Standard output file (%j expands to jobID)
+#SBATCH --error=error_%j.err
+
+source /users/maydin/scion/examples/modded-nanogpt/venv/bin/activate
+
+python data/cached_fineweb10B.py 8
+
+torchrun --standalone --nproc_per_node=4 train_gpt_scion.py
