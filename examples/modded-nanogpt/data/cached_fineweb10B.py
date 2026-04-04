@@ -17,4 +17,5 @@ num_chunks = 103
 if len(sys.argv) >= 2:
     num_chunks = int(sys.argv[1])
 for i in range(1, num_chunks+1):
+    print(f"Downloading chunk {i}")
     get("fineweb_train_%06d.bin" % i)
