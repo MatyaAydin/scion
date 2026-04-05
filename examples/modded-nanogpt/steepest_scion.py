@@ -316,7 +316,7 @@ class ScionSteepest(torch.optim.Optimizer):
 
 
                 if op == "dot":
-                    L.mul_(beta_LR).add_(g_2d.matmul(g_2d.T), alpha=1 - beta_LR).div_(L.sum())
+                    L.mul_(beta_LR).add_(g_2d.matmul(g_2d.T), alpha=1 - beta_LR)#.div_(L.sum())
 
                 else:
                     L.mul_(beta_LR).add_(g_2d * g_2d, alpha=1 - beta_LR)
