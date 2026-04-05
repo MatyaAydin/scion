@@ -246,7 +246,7 @@ class Hyperparameters:
     device_batch_size : int = 64 # batch size, in sequences, per device
     sequence_length : int = 1024 # sequence length, in tokens
     num_iterations : int = 5100 # number of iterations to run
-    learning_rate : float = 1e-6#0.00036
+    learning_rate : float = 1e-5#0.00036
     warmup_iters : int = 0
     warmdown_iters : int = 1450 # number of iterations of linear warmup/warmdown for triangular or trapezoidal schedule
     weight_decay : float = 0
@@ -347,7 +347,7 @@ if master_process:
     run_id = str(uuid.uuid4())
     logdir = 'logs/%s/' % run_id
     os.makedirs(logdir, exist_ok=True)
-    logfile = 'logs/%s.txt' % run_id
+    logfile = f'logs/logs_steepest_scion_{args.learning_rate}.txt'
     # create the log file
     with open(logfile, "w") as f:
         # begin the log by printing this file (the Python code)
