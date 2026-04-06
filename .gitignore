@@ -1,5 +1,6 @@
 __pycache__/
 *.out
 *.png
+*.npy
 venv/
 cifar10/

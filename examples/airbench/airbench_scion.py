@@ -685,12 +685,13 @@ if __name__ == "__main__":
         betas = [0.1 * i for i in range(10)]
 
         reset_values = [25, 50, 100, 250, 500, 1000]
+        reset_values = [1000]
 
         for reset_every in reset_values:
 
             optim = "scion_steepest"
             eps = epsilons[0]
-            optimizers[optim]["eps"] =
+            optimizers[optim]["eps"] = eps
             optimizers[optim]["use_bias_correction"] = eps < 1
             optimizers[optim]["reset_buffer_iter"] = reset_every
             # optimizers[optim]["beta_LR"] = beta

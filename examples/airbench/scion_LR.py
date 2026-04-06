@@ -289,6 +289,8 @@ class ScionSteepest(torch.optim.Optimizer):
                     continue
                 state = self.state[p]
 
+                g_2d = to_2d(g).float()
+
                 if "plot_name" not in state:
                     state["plot_name"] = f"param_{id(p)}"
 
@@ -298,14 +300,13 @@ class ScionSteepest(torch.optim.Optimizer):
                 state["step"] += 1
                 iter_number = state["step"]
 
-                if momentum != 0:
-                    if 'momentum_buffer' not in state.keys():
-                        state['momentum_buffer'] = torch.clone(g)
-                    buf = state['momentum_buffer']
-                    buf.mul_(momentum).add_(g, alpha=1. - momentum)
-                    g = buf
 
-                g_2d = to_2d(g).float()
+                if 'momentum_buffer' not in state.keys():
+                    state['momentum_buffer'] = torch.clone(g_2d)
+                buf = state['momentum_buffer']
+                if iter_number > 1:
+                    buf.mul_(momentum).add_(g_2d, alpha=1. - momentum)
+
 
                 if "L_buffer" not in state.keys():
                     if op == "hadamard":
@@ -355,7 +356,7 @@ class ScionSteepest(torch.optim.Optimizer):
                     bias_correction_M = 1. if not use_bias_correction else (1. - momentum**iter_number)
                     bias_correction_P = 1. if not use_bias_correction else (1. - beta_LR**iter_number)
 
-                    m_hat = g_2d / bias_correction_M
+                    m_hat = buf / bias_correction_M
                     p_hat = L.sqrt() / bias_correction_P**0.5
 
                     lmo_ = weighted_norm_D_lmo(norm_backend, m_hat, p_hat, 1e-8)
