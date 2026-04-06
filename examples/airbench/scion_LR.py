@@ -256,7 +256,7 @@ class ScionSteepest(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-    op="hadamard", beta_LR=0.999, order=4, eps=1e-8):
+    op="hadamard", beta_LR=0.999, order=4, eps=1e-8, use_bias_correction=True, reset_buffer_iter=250):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -264,7 +264,7 @@ class ScionSteepest(torch.optim.Optimizer):
         if norm_kwargs is None:
             norm_kwargs = {}
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
-        op=op, beta_LR=beta_LR, order=order, eps=eps)
+        op=op, beta_LR=beta_LR, order=order, eps=eps, use_bias_correction=use_bias_correction, reset_buffer_iter=reset_buffer_iter)
         super().__init__(params, defaults)
         self.dual_norm = 0.
         self.preconditioner_norm = 0.
@@ -280,25 +280,37 @@ class ScionSteepest(torch.optim.Optimizer):
             order = group["order"]
             beta_LR = group["beta_LR"]
             eps = group["eps"]
+            use_bias_correction = group["use_bias_correction"]
+            reset_buffer_iter = group["reset_buffer_iter"]
+
             for p in group['params']:
                 g = p.grad
                 if g is None:
                     continue
                 state = self.state[p]
 
-                if momentum != 1:
+                if "plot_name" not in state:
+                    state["plot_name"] = f"param_{id(p)}"
+
+
+                if "step" not in state:
+                    state["step"] = 0
+                state["step"] += 1
+                iter_number = state["step"]
+
+                if momentum != 0:
                     if 'momentum_buffer' not in state.keys():
                         state['momentum_buffer'] = torch.clone(g)
                     buf = state['momentum_buffer']
-                    buf.mul_(1-momentum).add_(g, alpha=momentum)
+                    buf.mul_(momentum).add_(g, alpha=1. - momentum)
                     g = buf
 
                 g_2d = to_2d(g).float()
 
                 if "L_buffer" not in state.keys():
                     if op == "hadamard":
-                        state["L_buffer"] =  torch.ones_like(g_2d)
-                        state["R_buffer"] = torch.ones_like(g_2d)
+                        state["L_buffer"] =  eps * torch.ones_like(g_2d)
+                        state["R_buffer"] =  eps * torch.ones_like(g_2d)
                     
                         # state["L_buffer"].copy_(g_2d * g_2d + 1e-4)
                     else: # dot
@@ -309,22 +321,29 @@ class ScionSteepest(torch.optim.Optimizer):
                 L = state["L_buffer"]
                 R = state["R_buffer"]
 
+
+                # reset buffer
+                if iter_number % reset_buffer_iter == 0:
+                    L = torch.min(L) * torch.ones_like(L)
+
                 self.preconditioner_norm = torch.linalg.norm(L, 'fro')
 
-                # D_inv = 1. / (L + 1e-4)
-                # scaled_G = D_inv * g_2d
+                # if iter_number % 100 == 0:
 
-                # print(f"g_2d stats: min={g_2d.min():.4f} max={g_2d.max():.4f} nan={g_2d.isnan().any()}")
-                # print(f"L stats:    min={L.min():.6f} max={L.max():.6f} nan={L.isnan().any()}, norm={torch.linalg.norm(L, 'fro')}")
-                # print(f"D_inv stats: min={D_inv.min():.2f} max={D_inv.max():.2f} nan={D_inv.isnan().any()}")
-                # print(f"scaled_G stats: min={scaled_G.min():.2f} max={scaled_G.max():.2f} nan={scaled_G.isnan().any()}")
-                # lmo_out = norm_backend.lmo(scaled_G)
-                # print(f"lmo_out stats: min={lmo_out.min():.4f} max={lmo_out.max():.4f} nan={lmo_out.isnan().any()}")
+                #     import matplotlib.pyplot as plt
+                #     import numpy as np
+                #     import seaborn as sns
+
+                #     to_plot = L.cpu().detach().numpy()
+                #     sns.heatmap(to_plot)
+                #     plt.title(f"iter number = {iter_number}")
+                #     plt.savefig(f"./plots/P_{state['plot_name']}_{group['norm']}_{iter_number}.png")
+                #     plt.clf()
 
 
 
                 if op == "dot":
-                    L.mul_(beta_LR).add_(g_2d.matmul(g_2d.T), alpha=1 - beta_LR)
+                    L.mul_(beta_LR).add_(g_2d.matmul(g_2d.T), alpha=1 - beta_LR)#.div_(L.sum())
                     R.mul_(beta_LR).add_(g_2d.T.matmul(g_2d), alpha=1 - beta_LR)
 
                 else:
@@ -333,13 +352,25 @@ class ScionSteepest(torch.optim.Optimizer):
 
 
                 if op == "hadamard":
-                    lmo_ = weighted_norm_D_lmo(norm_backend, g_2d, L.sqrt(), eps)
-                    dual_norm = (lmo_ * g_2d).sum()
+                    bias_correction_M = 1. if not use_bias_correction else (1. - momentum**iter_number)
+                    bias_correction_P = 1. if not use_bias_correction else (1. - beta_LR**iter_number)
+
+                    m_hat = g_2d / bias_correction_M
+                    p_hat = L.sqrt() / bias_correction_P**0.5
+
+                    lmo_ = weighted_norm_D_lmo(norm_backend, m_hat, p_hat, 1e-8)
+                    dual_norm = (lmo_ * m_hat).sum()
                     self.dual_norm = dual_norm
                     update = scale * lmo_ * dual_norm
+
+                    # print(f"{'='*30} Iter number {iter_number} {'='*30}")
+                    # print(f"m_hat: min={m_hat.min()}, max={m_hat.max()}")
+                    # print(f"p_hat: min={p_hat.min()}, max={p_hat.max()}")
+                    # print(f"lmo output: min={lmo_.min()}, max={lmo_.max()}")
+                    # print(f"dual_norm: {dual_norm}")
                 else:
                     self.dual_norm = 0.
-                    update = scale / (L.sum()) * weighted_norm_LR_lmo(norm_backend, g_2d, L, R, order=order)
+                    update = scale * weighted_norm_LR_lmo(norm_backend, g_2d, L, R, order=order)
                 update = update.reshape(g.shape)
 
                 if not unconstrained:

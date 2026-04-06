@@ -363,7 +363,7 @@ def evaluate(model, loader, tta_level=0):
 #                Training                  #
 ############################################
 
-def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="scion_steepest", radius=8.0):
+def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="scion_steepest", radius=8.0, constant_ratio=0.5, do_plot=False):
     batch_size = hyp['opt']['batch_size']
     epochs = hyp['opt']['train_epochs']
     #momentum = hyp['opt']['momentum']
@@ -440,16 +440,26 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
 
             return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-        # Make learning rate schedulers for all 5 optimizers
         def get_lr(step):
             return 1 - step / total_train_steps
-        scheduler_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer_trainbias, get_lr)
-        scheduler2_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer2_trainbias, get_lr)
-        scheduler_freezebias = torch.optim.lr_scheduler.LambdaLR(optimizer_freezebias, get_lr)
 
-        # scheduler_trainbias = custom_scheduler(optimizer_trainbias, warmup_steps=int(0.3 * total_train_steps), constant_steps=int(0.4 * total_train_steps),  total_steps=total_train_steps)
-        # scheduler2_trainbias = custom_scheduler(optimizer2_trainbias, warmup_steps=int(0.3 * total_train_steps), constant_steps=int(0.4 * total_train_steps),  total_steps=total_train_steps)
-        # scheduler_freezebias = custom_scheduler(optimizer_freezebias, warmup_steps=int(0.3 * total_train_steps), constant_steps=int(0.4 * total_train_steps),  total_steps=total_train_steps)
+        if optimizer_name == "scion_steepest":
+            # scheduler_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer_trainbias, get_lr)
+            # scheduler2_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer2_trainbias, get_lr)
+            # scheduler_freezebias = torch.optim.lr_scheduler.LambdaLR(optimizer_freezebias, get_lr)
+
+            warmup_steps = 2 * len(train_loader)
+            constant_steps = int(constant_ratio * total_train_steps)
+
+            scheduler_trainbias = custom_scheduler(optimizer_trainbias, warmup_steps=warmup_steps, constant_steps=constant_steps,  total_steps=total_train_steps)
+            scheduler2_trainbias = custom_scheduler(optimizer2_trainbias, warmup_steps=warmup_steps, constant_steps=constant_steps,  total_steps=total_train_steps)
+            scheduler_freezebias = custom_scheduler(optimizer_freezebias, warmup_steps=warmup_steps, constant_steps=constant_steps,  total_steps=total_train_steps)
+
+        else:
+            scheduler_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer_trainbias, get_lr)
+            scheduler2_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer2_trainbias, get_lr)
+            scheduler_freezebias = torch.optim.lr_scheduler.LambdaLR(optimizer_freezebias, get_lr)
+
 
 
     else:
@@ -497,6 +507,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
 
     loss_history = []
     dual_norm_history = []
+    precond_norm_history = []
 
 
     for epoch in range(ceil(epochs)):
@@ -524,6 +535,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
         starter.record()
 
         dual_norm_epoch = 0.
+        precond_norm_epoch = 0.
 
         model.train()
         for inputs, labels in train_loader:
@@ -537,13 +549,15 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
                 opt.step()
                 sched.step()
                 if isinstance(opt, ScionSteepest):
-                    dual_norm_epoch += opt.preconditioner_norm.item()
+                    precond_norm_epoch += opt.preconditioner_norm.item()
+                    dual_norm_epoch += opt.dual_norm.item()
 
             current_steps += 1
             if current_steps >= total_train_steps:
                 break
 
         dual_norm_history.append(dual_norm_epoch / len(train_loader))
+        precond_norm_history.append(precond_norm_epoch / len(train_loader))
 
 
         ender.record()
@@ -565,12 +579,24 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
     #  TTA Evaluation  #
     ####################
 
-    if optimizer_name == "scion_steepest":
-        plt.plot(range(len(dual_norm_history)), np.array(dual_norm_history))
-        plt.xlabel("Epoch")
-        plt.ylabel("Value")
-        plt.title("Preconditioner norm value")
-        plt.savefig("./plots/precond_norm.png")
+    if optimizer_name == "scion_steepest" and do_plot:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+        
+        epochs_range = range(len(dual_norm_history))
+        
+        ax1.plot(epochs_range, dual_norm_history)
+        ax1.set_xlabel("Epoch")
+        ax1.set_ylabel("Value")
+        ax1.set_title("Dual norm")
+        
+        ax2.plot(epochs_range, precond_norm_history)
+        ax2.set_xlabel("Epoch")
+        ax2.set_ylabel("Value")
+        ax2.set_title("Preconditioner norm")
+        
+        plt.tight_layout()
+        plt.savefig(f"./plots/dual_and_precond_norm_stepratio.png")
+        plt.clf()
 
     starter.record()
     tta_val_acc = evaluate(model, test_loader, tta_level=hyp['net']['tta_level'])
@@ -627,8 +653,8 @@ if __name__ == "__main__":
             return acc
         
         #for log2lr in np.linspace(-9, 0, 10):
-        log2lr =math.log2(0.05)
-        momentum = 0.6
+        log2lr = math.log2(0.05)
+        momentum = 0.9 # 0.6
 
 
         sgd_params = {
@@ -643,8 +669,9 @@ if __name__ == "__main__":
 
         }
         scion_steepest_params = {
-            "lr":5*1e-4,
-            "momentum": momentum
+            "lr":1e-5,
+            "momentum": momentum,
+            "eps":1e-6
 
         }
 
@@ -654,19 +681,34 @@ if __name__ == "__main__":
             "scion_steepest":scion_steepest_params
         }
 
-        for optim in optimizers.keys():
+        epsilons = [1]
+        betas = [0.1 * i for i in range(10)]
 
-            print(f"{'='*30} {optim} {'='*30}")
-            accs, loss_history = main(1, model_trainbias, model_freezebias, extra_params=optimizers[optim], optimizer_name=optim)
+        reset_values = [25, 50, 100, 250, 500, 1000]
 
-        #     plt.plot(range(len(loss_history)), loss_history, label=optim)
+        for reset_every in reset_values:
 
-        # loss_muon = np.load("./loss/muon_loss.npy")
+            optim = "scion_steepest"
+            eps = epsilons[0]
+            optimizers[optim]["eps"] =
+            optimizers[optim]["use_bias_correction"] = eps < 1
+            optimizers[optim]["reset_buffer_iter"] = reset_every
+            # optimizers[optim]["beta_LR"] = beta
+
+            print(f"{'='*30}, reset_every={reset_every} {'='*30}")
+            accs, loss_history = main(1, model_trainbias, model_freezebias, extra_params=optimizers[optim], optimizer_name=optim, constant_ratio=0.3, do_plot=False)
+
+            plt.plot(range(len(loss_history)), loss_history, label=f"T={reset_every}")
+            
+
+        # loss_muon = np.load("./loss/muon_loss_25.npy")
         # plt.plot(range(len(loss_muon)), loss_muon, label="muon")
 
-        # plt.legend(loc="upper right")
-        # plt.xlabel("Iteration")
-        # plt.ylabel("Loss")
-        # plt.savefig("./plots/loss.png")
+        # plt.title(r"$\beta$ value")
+        plt.legend(loc="upper right")
+        plt.xlabel("Iteration")
+        plt.ylabel("Loss")
+        plt.savefig(f"./plots/loss_reset_every.png")
+        plt.clf()
 
 

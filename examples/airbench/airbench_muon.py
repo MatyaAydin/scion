@@ -46,7 +46,7 @@ hyp = {
     },
     'opt': {
         'svd_backend': 'newton',
-        'train_epochs': 8,
+        'train_epochs': 25,
         'batch_size': 2000,
         'lr': 6.5,                 # learning rate per 1024 examples
         'momentum': 0.85,
@@ -610,4 +610,4 @@ if __name__ == "__main__":
     main('warmup', model_trainbias, model_freezebias)
     accs, loss = main("train", model_trainbias, model_freezebias)
 
-    np.save("./loss/muon_loss.npy", loss)
+    np.save("./loss/muon_loss_25.npy", loss)
