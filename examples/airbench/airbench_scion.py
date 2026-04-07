@@ -28,6 +28,7 @@ import wandb
 import optuna
 from scion_LR import ScionSteepest
 from scion import Scion
+from ada_scion import AdaScion
 
 from torch.optim import AdamW, SGD
 
@@ -55,7 +56,7 @@ hyp = {
     },
     'opt': {
         'svd_backend': 'newton',
-        'train_epochs': 25,
+        'train_epochs': 8,
         'batch_size': 2000,
         'lr': 6.5,                 # learning rate per 1024 examples
         'momentum': 0.85,
@@ -404,11 +405,17 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
             dict(norm='Sign', scale=head_radius, params=[fc_layer]),
         ]
 
+        if optimizer_name == "scion_steepest":
+            optimizer = ScionSteepest(parameters, **extra_params)
+            optimizer2_trainbias = ScionSteepest(norm='BiasRMS', scale=radius, params=[whiten_bias], **extra_params)
+        elif optimizer_name == "adascion":
+            optimizer = AdaScion(parameters, **extra_params)
+            optimizer2_trainbias = AdaScion(norm='BiasRMS', scale=radius, params=[whiten_bias], **extra_params)
+        else:
+            optimizer = Scion(parameters, **extra_params)
+            optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], **extra_params)
 
-
-        optimizer = Scion(parameters, **extra_params) if optimizer_name == "scion" else ScionSteepest(parameters, **extra_params)
         optimizer_trainbias = optimizer
-        optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], **extra_params) if optimizer_name == "scion" else ScionSteepest(norm='BiasRMS', scale=radius, params=[whiten_bias], **extra_params) 
 
         # Create optimizers for frozen whiten bias stage
         model = model_freezebias
@@ -421,7 +428,13 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
             dict(norm='BiasRMS', scale=radius, params=[p for n, p in model.named_parameters() if 'norm' in n and p.requires_grad]),
             dict(norm='Sign', scale=head_radius, params=[fc_layer]),
         ]
-        optimizer = Scion(parameters, **extra_params) if optimizer_name == "scion" else ScionSteepest(parameters, **extra_params)
+
+        if optimizer_name == "scion_steepest":
+            optimizer = ScionSteepest(parameters, **extra_params)
+        elif optimizer_name == "adascion":
+            optimizer = AdaScion(parameters, **extra_params)
+        else:
+            optimizer = Scion(parameters, **extra_params)
         optimizer_freezebias = optimizer
 
         def custom_scheduler(optimizer, warmup_steps, constant_steps, total_steps):
@@ -443,7 +456,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
         def get_lr(step):
             return 1 - step / total_train_steps
 
-        if optimizer_name == "scion_steepest":
+        if optimizer_name == "scion_steepest" or optimizer_name == "adascion":
             # scheduler_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer_trainbias, get_lr)
             # scheduler2_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer2_trainbias, get_lr)
             # scheduler_freezebias = torch.optim.lr_scheduler.LambdaLR(optimizer_freezebias, get_lr)
@@ -671,35 +684,45 @@ if __name__ == "__main__":
         scion_steepest_params = {
             "lr":1e-5,
             "momentum": momentum,
-            "eps":1e-6
+            "eps":1e-6,
+            "reset_buffer_iter":1000,
+            "beta_LR": 0.99
+
+        }
+
+        adascion_params = {
+            "momentum":momentum,
+            "beta_LR":0.99,
 
         }
 
         optimizers = {
-            # "sgd":sgd_params,
-            # "scion":scion_params,
-            "scion_steepest":scion_steepest_params
+            "sgd":sgd_params,
+            "scion":scion_params,
+            "scion_steepest":scion_steepest_params,
+            "adascion":adascion_params
         }
 
-        epsilons = [1]
+        epsilons = [1e-4]
         betas = [0.1 * i for i in range(10)]
+        lrs = [5*1e-5]
 
-        reset_values = [25, 50, 100, 250, 500, 1000]
-        reset_values = [1000]
+        reset_values = [50, 100, 250, 500, 1000]
 
-        for reset_every in reset_values:
+        for lr in lrs:
 
-            optim = "scion_steepest"
+            optim = "adascion"
             eps = epsilons[0]
             optimizers[optim]["eps"] = eps
-            optimizers[optim]["use_bias_correction"] = eps < 1
-            optimizers[optim]["reset_buffer_iter"] = reset_every
+            optimizers[optim]["use_bias_correction"] = eps < 1e-12
+            optimizers[optim]["lr"] = lr
+            # optimizers[optim]["reset_buffer_iter"] = reset_every
             # optimizers[optim]["beta_LR"] = beta
 
-            print(f"{'='*30}, reset_every={reset_every} {'='*30}")
+            print(f"{'='*30}, lr={lr} {'='*30}")
             accs, loss_history = main(1, model_trainbias, model_freezebias, extra_params=optimizers[optim], optimizer_name=optim, constant_ratio=0.3, do_plot=False)
 
-            plt.plot(range(len(loss_history)), loss_history, label=f"T={reset_every}")
+            plt.plot(range(len(loss_history)), loss_history, label=f"lr={lr}")
             
 
         # loss_muon = np.load("./loss/muon_loss_25.npy")
@@ -709,7 +732,7 @@ if __name__ == "__main__":
         plt.legend(loc="upper right")
         plt.xlabel("Iteration")
         plt.ylabel("Loss")
-        plt.savefig(f"./plots/loss_reset_every.png")
+        plt.savefig(f"./plots/loss_lr_fixed.png")
         plt.clf()
 
 

@@ -3,7 +3,7 @@ import torch
 
 
 #######################################################
-# Scion
+# AdaScion
 #######################################################
 
 
@@ -97,7 +97,7 @@ class RowNorm(Norm):
 
 
 class BiasRMS(Norm):
-    def __init__(self, g):
+    def __init__(self):
         self.norm_type = "euclidean"
 
     def lmo(self, g):
@@ -264,7 +264,7 @@ class AdaScion(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-                beta_LR=0.999, order=4, eps=1e-8, use_bias_correction=True):
+                beta_LR=0.999, order=8, eps=1e-8, use_bias_correction=True):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -341,6 +341,8 @@ class AdaScion(torch.optim.Optimizer):
 
                     L.mul_(beta_LR).add_(g_2d.matmul(g_2d.T), alpha=1 - beta_LR)
                     R.mul_(beta_LR).add_(g_2d.T.matmul(g_2d), alpha=1 - beta_LR)
+                    # L.add_(g_2d.matmul(g_2d.T), alpha=1.)
+                    # R.add_(g_2d.T.matmul(g_2d), alpha=1.)
                     update = scale * weighted_norm_LR_lmo(norm_backend, buf, L, R, order=order)
 
 
@@ -413,40 +415,47 @@ def to_2d(g):
     return g.reshape(g.shape[0], -1)  # [d0, d1*d2*...] for conv/linear weights
 
 
-def weighted_norm_LR_lmo(norm, G, L, R, order=4, op="dot"):
+def weighted_norm_LR_lmo(norm, G, L, R, order=8):
     p = 1.0 / order
+    eps_stab = 1e-4
 
-    U_L, sigma_L, Vh_L = torch.linalg.svd(L, full_matrices=False)
-    U_R, sigma_R, Vh_R = torch.linalg.svd(R, full_matrices=False)
+    # 1. Cast to DOUBLE precision (float64) for the solver. 
+    # Float32 is often not enough for ill-conditioned covariance matrices on GPU.
+    L_d = L.double() + eps_stab * torch.eye(L.size(0), device=L.device, dtype=torch.float64)
+    R_d = R.double() + eps_stab * torch.eye(R.size(0), device=R.device, dtype=torch.float64)
 
-    # Threshold and take fractional power
-    sigma_L_inv = torch.where(sigma_L > 1e-4, sigma_L ** (-p), torch.zeros_like(sigma_L))
-    sigma_R_inv = torch.where(sigma_R > 1e-4, sigma_R ** (-p), torch.zeros_like(sigma_R))
+    try:
+        # 2. Try computing eigh on the GPU in double precision
+        sigma_L, U_L = torch.linalg.eigh(L_d)
+        sigma_R, U_R = torch.linalg.eigh(R_d)
+    except torch._C._LinAlgError:
+        # 3. BULLETPROOF FALLBACK: Compute on CPU if GPU solver fails
+        # (CPU LAPACK solvers are significantly more robust than GPU solvers)
+        print("Fallback to eigh on cpu")
+        sigma_L, U_L = torch.linalg.eigh(L_d.cpu())
+        sigma_R, U_R = torch.linalg.eigh(R_d.cpu())
+        sigma_L, U_L = sigma_L.to(L.device), U_L.to(L.device)
+        sigma_R, U_R = sigma_R.to(R.device), U_R.to(R.device)
 
-    # Correct: M^{-p} = U @ diag(sigma^{-p}) @ Vh  (for symmetric PSD, Vh = U.T)
-    L_inv = Vh_L.T @ torch.diag(sigma_L_inv) @ U_L.T   # shape [m, m]
-    R_inv = Vh_R.T @ torch.diag(sigma_R_inv) @ U_R.T   # shape [n, n]
+    # 4. Cast back to float32 and clamp to avoid NaNs
+    sigma_L = torch.clamp(sigma_L.float(), min=eps_stab)
+    sigma_R = torch.clamp(sigma_R.float(), min=eps_stab)
+    U_L = U_L.float()
+    U_R = U_R.float()
 
-    L_inv_T = L_inv.T
-    R_inv_T = R_inv.T
+    sigma_L_inv = sigma_L ** (-p)
+    sigma_R_inv = sigma_R ** (-p)
 
-    return L_inv.matmul(norm.lmo(L_inv_T.matmul(G).matmul(R_inv_T))).matmul(R_inv)
+    # 5. Reconstruct L^{-p} and R^{-p}
+    L_inv = (U_L @ torch.diag(sigma_L_inv) @ U_L.T).to(L.dtype)
+    R_inv = (U_R @ torch.diag(sigma_R_inv) @ U_R.T).to(R.dtype)
+
+    return L_inv.matmul(norm.lmo(L_inv.matmul(G).matmul(R_inv))).matmul(R_inv)
 
 def weighted_norm_D_lmo(norm, G, D, eps=1e-4):
     D_inv = 1. / (D + eps)
     return D_inv * norm.lmo(D_inv * G)
 
-
-
-def matrix_power(matrix, power):
-    """
-    From https://github.com/moskomule/shampoo.pytorch/blob/master/shampoo.py
-    """
-
-    # matrix = matrix.cpu()
-    # matrix = matrix.float()
-    u, s, v = torch.svd(matrix)
-    return (u @ s.pow_(power).diag() @ v.t())
 
 
 
