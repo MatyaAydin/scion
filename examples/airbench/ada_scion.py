@@ -264,7 +264,7 @@ class AdaScion(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-                beta_LR=0.999, order=8, eps=1e-8, use_bias_correction=True):
+                beta_LR=0.999, order=8, eps=1e-8, use_bias_correction=True, power_frequency=50):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -272,7 +272,7 @@ class AdaScion(torch.optim.Optimizer):
         if norm_kwargs is None:
             norm_kwargs = {}
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
-        beta_LR=beta_LR, order=order, eps=eps, use_bias_correction=use_bias_correction)
+        beta_LR=beta_LR, order=order, eps=eps, use_bias_correction=use_bias_correction, power_frequency=power_frequency)
         super().__init__(params, defaults)
 
     def step(self):
@@ -286,6 +286,7 @@ class AdaScion(torch.optim.Optimizer):
             beta_LR = group["beta_LR"]
             eps = group["eps"]
             use_bias_correction = group["use_bias_correction"]
+            power_frequency = group["power_frequency"]
 
             norm_type = norm_backend.norm_type
 
@@ -301,7 +302,6 @@ class AdaScion(torch.optim.Optimizer):
                     state["step"] = 0
                 state["step"] += 1
                 iter_number = state["step"]
-
 
                 if 'momentum_buffer' not in state.keys():
                     state['momentum_buffer'] = torch.clone(g_2d)
@@ -326,7 +326,6 @@ class AdaScion(torch.optim.Optimizer):
 
                     lmo_ = weighted_norm_D_lmo(norm_backend, m_hat, p_hat, 1e-8)
                     dual_norm = (lmo_ * m_hat).sum()
-                    self.dual_norm = dual_norm
                     update = scale * lmo_ * dual_norm
 
 
@@ -335,6 +334,8 @@ class AdaScion(torch.optim.Optimizer):
                     if "L_buffer" not in state.keys():
                         state["L_buffer"] = eps * torch.eye(g_2d.shape[0], g_2d.shape[0], device=g.device, dtype=g_2d.dtype)
                         state["R_buffer"] = eps * torch.eye(g_2d.shape[1], g_2d.shape[1], device=g.device, dtype=g_2d.dtype)
+                        state["L_inv"] = None
+                        state["R_inv"] = None
 
                     L = state["L_buffer"]
                     R = state["R_buffer"]
@@ -343,7 +344,19 @@ class AdaScion(torch.optim.Optimizer):
                     R.mul_(beta_LR).add_(g_2d.T.matmul(g_2d), alpha=1 - beta_LR)
                     # L.add_(g_2d.matmul(g_2d.T), alpha=1.)
                     # R.add_(g_2d.T.matmul(g_2d), alpha=1.)
-                    update = scale * weighted_norm_LR_lmo(norm_backend, buf, L, R, order=order)
+
+                    if iter_number % power_frequency == 1 or state["L_inv"] is None:
+                        L_inv, R_inv = compute_LR_inv(L, R, order=order, eps_stab=eps)
+                        state["L_inv"] = L_inv
+                        state["R_inv"] = R_inv
+
+                    L_inv = state["L_inv"]
+                    R_inv = state["R_inv"]
+
+                    lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
+                    dual_norm = (lmo_ * buf).sum()
+                    update = scale * lmo_ * dual_norm
+
 
 
                 update = update.reshape(g.shape)
@@ -394,9 +407,6 @@ def zeropower_via_newtonschulz5(G, steps=5):
     return X.float()
 
 
-def zeroth_power_via_svd(G):
-   U, S, V = G.svd()
-   return U @ V.T
 
 def matrix_power(matrix, power):
     """
@@ -414,30 +424,26 @@ def to_2d(g):
         return g.unsqueeze(0)   # [1, d] — treat as single row
     return g.reshape(g.shape[0], -1)  # [d0, d1*d2*...] for conv/linear weights
 
+def weighted_norm_D_lmo(norm, G, D, eps=1e-4):
+    D_inv = 1. / (D + eps)
+    return D_inv * norm.lmo(D_inv * G)
 
-def weighted_norm_LR_lmo(norm, G, L, R, order=8):
+def compute_LR_inv(L, R, order=8, eps_stab=1e-4):
     p = 1.0 / order
-    eps_stab = 1e-4
-
-    # 1. Cast to DOUBLE precision (float64) for the solver. 
-    # Float32 is often not enough for ill-conditioned covariance matrices on GPU.
+    
     L_d = L.double() + eps_stab * torch.eye(L.size(0), device=L.device, dtype=torch.float64)
     R_d = R.double() + eps_stab * torch.eye(R.size(0), device=R.device, dtype=torch.float64)
 
     try:
-        # 2. Try computing eigh on the GPU in double precision
         sigma_L, U_L = torch.linalg.eigh(L_d)
         sigma_R, U_R = torch.linalg.eigh(R_d)
     except torch._C._LinAlgError:
-        # 3. BULLETPROOF FALLBACK: Compute on CPU if GPU solver fails
-        # (CPU LAPACK solvers are significantly more robust than GPU solvers)
-        print("Fallback to eigh on cpu")
+        print('CPU fallback')
         sigma_L, U_L = torch.linalg.eigh(L_d.cpu())
         sigma_R, U_R = torch.linalg.eigh(R_d.cpu())
         sigma_L, U_L = sigma_L.to(L.device), U_L.to(L.device)
         sigma_R, U_R = sigma_R.to(R.device), U_R.to(R.device)
 
-    # 4. Cast back to float32 and clamp to avoid NaNs
     sigma_L = torch.clamp(sigma_L.float(), min=eps_stab)
     sigma_R = torch.clamp(sigma_R.float(), min=eps_stab)
     U_L = U_L.float()
@@ -446,16 +452,14 @@ def weighted_norm_LR_lmo(norm, G, L, R, order=8):
     sigma_L_inv = sigma_L ** (-p)
     sigma_R_inv = sigma_R ** (-p)
 
-    # 5. Reconstruct L^{-p} and R^{-p}
     L_inv = (U_L @ torch.diag(sigma_L_inv) @ U_L.T).to(L.dtype)
     R_inv = (U_R @ torch.diag(sigma_R_inv) @ U_R.T).to(R.dtype)
 
-    return L_inv.matmul(norm.lmo(L_inv.matmul(G).matmul(R_inv))).matmul(R_inv)
+    return L_inv, R_inv
 
-def weighted_norm_D_lmo(norm, G, D, eps=1e-4):
-    D_inv = 1. / (D + eps)
-    return D_inv * norm.lmo(D_inv * G)
-
+def weighted_norm_LR_lmo(norm, G, L_inv, R_inv):
+    precond_G = L_inv.matmul(G).matmul(R_inv)
+    return L_inv.matmul(norm.lmo(precond_G)).matmul(R_inv)
 
 
 
