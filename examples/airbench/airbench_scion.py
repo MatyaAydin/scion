@@ -56,7 +56,7 @@ hyp = {
     },
     'opt': {
         'svd_backend': 'newton',
-        'train_epochs': 8,
+        'train_epochs': 25,
         'batch_size': 2000,
         'lr': 6.5,                 # learning rate per 1024 examples
         'momentum': 0.85,
@@ -646,23 +646,29 @@ if __name__ == "__main__":
         model_trainbias = torch.compile(model_trainbias)#, mode='max-autotune')
         model_freezebias = torch.compile(model_freezebias)#, mode='max-autotune')
 
-        extra_params = {
-            "lr": 3*1e-4
-        
-        }
-
         print_columns(logging_columns_list, is_head=True)
+        extra_params = {"lr":3*1e-4}
         main('warmup', model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="sgd")
 
         def objective(trial):
-            # can add eps
-            lr = trial.suggest_float("lr", 5*1e-4, 1e-2, log=True)
-            momentum = trial.suggest_float("momentum", 0., 1.)
+
             extra_params = {
-                "clip_range": trial.suggest_float("clip_range", 1e-1, 10, log=True)
+            "lr": trial.suggest_float("lr", 1e-5, 1e-3, log=True),
+            "momentum": trial.suggest_float("momentum", 0.4, 1.),
+            "beta_eucl": trial.suggest_float("beta_eucl", 0.85, 0.999),
+            "beta_spectral": trial.suggest_float("beta_spectral", 0.9, 0.999),
+            "power_frequency": 100, #trial.suggest_int("power_frequency"),
+            "normalize_update": trial.suggest_categorical("normalize_update", [True, False]),
+            "use_trace_normalization": trial.suggest_categorical("use_trace_normalization", [True, False])
             }
-            # radius = trial.suggest_float("radius", 1., 8.)
-            acc, _ = main("train", model_trainbias, model_freezebias, lr=lr, extra_params=extra_params, optimizer_name="sgd")
+
+            constant_ratio = trial.suggest_float("constant_ratio", 0.1, 0.9)
+            
+            try:
+                acc, _ = main("train", model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="adascion", constant_ratio=constant_ratio, do_plot=False)
+            except Exception as e:
+                # print(f"Error during optuna trial: {e}")
+                acc= 0.
             return acc
         
         #for log2lr in np.linspace(-9, 0, 10):
@@ -686,13 +692,18 @@ if __name__ == "__main__":
             "momentum": momentum,
             "eps":1e-6,
             "reset_buffer_iter":1000,
-            "beta_LR": 0.99
+            "beta_LR": 0.95
 
         }
 
         adascion_params = {
             "momentum":momentum,
-            "beta_LR":0.99,
+            "beta_eucl":0.99,
+            "beta_spectral":0.999,
+            "power_frequency":50,
+            "order":8,
+            "eps":1e-9,
+            "lr": 1e-5
 
         }
 
@@ -703,36 +714,62 @@ if __name__ == "__main__":
             "adascion":adascion_params
         }
 
-        epsilons = [1e-4]
-        betas = [0.1 * i for i in range(10)]
-        lrs = [5*1e-5]
 
-        reset_values = [50, 100, 250, 500, 1000]
+        hparameters_range = {
+            "lr": [], #[1e-5, 5*1e-5, 1e-4, 5*1e-4, 1e-3],
+            "cst_ratio": [0.1*i for i in range(1, 10)],
+            "power_frequency": [25, 50, 100],
+            "beta_eucl": [0.99],
+            "beta_spectral": [0.85, 0.9, 0.95, 0.99, 0.999],
+            "momentum": [0.4, 0.5, 0.6, 0.75, 0.8, 0.9]
+        }
 
-        for lr in lrs:
+        hparam = "lr"
+
+        for param in hparameters_range[hparam]:
 
             optim = "adascion"
-            eps = epsilons[0]
-            optimizers[optim]["eps"] = eps
-            optimizers[optim]["use_bias_correction"] = eps < 1e-12
-            optimizers[optim]["lr"] = lr
+
+            if hparam != "cst_ratio":
+                optimizers[optim][hparam] = param
             # optimizers[optim]["reset_buffer_iter"] = reset_every
             # optimizers[optim]["beta_LR"] = beta
 
-            print(f"{'='*30}, lr={lr} {'='*30}")
-            accs, loss_history = main(1, model_trainbias, model_freezebias, extra_params=optimizers[optim], optimizer_name=optim, constant_ratio=0.3, do_plot=False)
+            if hparam == "power_frequency":
+                hyp['opt']['train_epochs'] = 25
 
-            plt.plot(range(len(loss_history)), loss_history, label=f"lr={lr}")
+
+            if hparam == "cst_ratio":
+                hyp['opt']['train_epochs'] = 25
+                constant_ratio = param
+            else:
+                if hyp['opt']['train_epochs'] < 10:
+                    constant_ratio = 0.3
+                else:
+                    constant_ratio = 0.6
+
+            try:
+                print(f"{'='*30}, {hparam}={param} {'='*30}")
+                accs, loss_history = main(1, model_trainbias, model_freezebias, extra_params=optimizers[optim], optimizer_name=optim, constant_ratio=constant_ratio, do_plot=False)
+
+                plt.plot(range(len(loss_history)), loss_history, label=f"{hparam}={param}")
+            except Exception as e:
+                print(e)
             
 
         # loss_muon = np.load("./loss/muon_loss_25.npy")
         # plt.plot(range(len(loss_muon)), loss_muon, label="muon")
 
         # plt.title(r"$\beta$ value")
-        plt.legend(loc="upper right")
-        plt.xlabel("Iteration")
-        plt.ylabel("Loss")
-        plt.savefig(f"./plots/loss_lr_fixed.png")
-        plt.clf()
+        # plt.legend(loc="upper right")
+        # plt.xlabel("Iteration")
+        # plt.ylabel("Loss")
+        # plt.savefig(f"./plots/loss_steepest_inv_{hparam}.png")
+        # plt.clf()
+
+        study_name = "steepestscion-study"  # Unique identifier of the study.
+        storage_name = f"sqlite:///{study_name}.db"
+        study = optuna.create_study(direction="maximize", study_name=study_name, storage=storage_name)
+        study.optimize(objective, n_trials=850)
 
 

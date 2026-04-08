@@ -264,7 +264,7 @@ class AdaScion(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-                beta_LR=0.999, order=8, eps=1e-8, use_bias_correction=True, power_frequency=50):
+                beta_eucl=0.99, beta_spectral=0.999, order=8, eps=1e-8, power_frequency=50, normalize_update=False, use_trace_normalization=False):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -272,7 +272,7 @@ class AdaScion(torch.optim.Optimizer):
         if norm_kwargs is None:
             norm_kwargs = {}
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
-        beta_LR=beta_LR, order=order, eps=eps, use_bias_correction=use_bias_correction, power_frequency=power_frequency)
+        beta_eucl=beta_eucl, beta_spectral=beta_spectral, order=order, eps=eps, power_frequency=power_frequency, normalize_update=normalize_update, use_trace_normalization=use_trace_normalization)
         super().__init__(params, defaults)
 
     def step(self):
@@ -283,10 +283,12 @@ class AdaScion(torch.optim.Optimizer):
             unconstrained = group['unconstrained']
             norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
             order = group["order"]
-            beta_LR = group["beta_LR"]
+            beta_eucl = group["beta_eucl"]
+            beta_spectral = group["beta_spectral"]
             eps = group["eps"]
-            use_bias_correction = group["use_bias_correction"]
             power_frequency = group["power_frequency"]
+            normalize_update = group["normalize_update"]
+            use_trace_normalization = group["use_trace_normalization"]
 
             norm_type = norm_backend.norm_type
 
@@ -313,19 +315,21 @@ class AdaScion(torch.optim.Optimizer):
                 if norm_type == "euclidean":
 
                     if "euclidean_buffer" not in state.keys():
-                        state["euclidean_buffer"] =  eps * torch.ones_like(g_2d)
+                        state["euclidean_buffer"] =  torch.zeros_like(g_2d)
 
                     eucl_buffer = state["euclidean_buffer"]
-                    eucl_buffer.mul_(beta_LR).add_(g_2d * g_2d, alpha=1 - beta_LR)
+                    eucl_buffer.mul_(beta_eucl).add_(g_2d * g_2d, alpha=1 - beta_eucl)
 
-                    bias_correction_M = 1. if not use_bias_correction else (1. - momentum**iter_number)
-                    bias_correction_P = 1. if not use_bias_correction else (1. - beta_LR**iter_number)
+                    bias_correction_M = 1. - momentum**iter_number
+                    bias_correction_P = 1. - beta_eucl**iter_number
 
                     m_hat = buf / bias_correction_M
                     p_hat = eucl_buffer.sqrt() / bias_correction_P**0.5
 
-                    lmo_ = weighted_norm_D_lmo(norm_backend, m_hat, p_hat, 1e-8)
+                    lmo_ = weighted_norm_D_lmo(norm_backend, m_hat, p_hat, eps)
                     dual_norm = (lmo_ * m_hat).sum()
+                    if normalize_update:
+                        dual_norm /= min(g_2d.shape[0], g_2d.shape[1])
                     update = scale * lmo_ * dual_norm
 
 
@@ -340,13 +344,13 @@ class AdaScion(torch.optim.Optimizer):
                     L = state["L_buffer"]
                     R = state["R_buffer"]
 
-                    L.mul_(beta_LR).add_(g_2d.matmul(g_2d.T), alpha=1 - beta_LR)
-                    R.mul_(beta_LR).add_(g_2d.T.matmul(g_2d), alpha=1 - beta_LR)
+                    L.mul_(beta_spectral).add_(g_2d.matmul(g_2d.T), alpha=1 - beta_spectral)
+                    R.mul_(beta_spectral).add_(g_2d.T.matmul(g_2d), alpha=1 - beta_spectral)
                     # L.add_(g_2d.matmul(g_2d.T), alpha=1.)
                     # R.add_(g_2d.T.matmul(g_2d), alpha=1.)
 
                     if iter_number % power_frequency == 1 or state["L_inv"] is None:
-                        L_inv, R_inv = compute_LR_inv(L, R, order=order, eps_stab=eps)
+                        L_inv, R_inv = compute_LR_inv(L, R, order=order, eps_stab=eps, use_trace_normalization=use_trace_normalization)
                         state["L_inv"] = L_inv
                         state["R_inv"] = R_inv
 
@@ -355,6 +359,8 @@ class AdaScion(torch.optim.Optimizer):
 
                     lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
                     dual_norm = (lmo_ * buf).sum()
+                    if normalize_update:
+                        dual_norm /= min(g_2d.shape[0], g_2d.shape[1])
                     update = scale * lmo_ * dual_norm
 
 
@@ -428,11 +434,24 @@ def weighted_norm_D_lmo(norm, G, D, eps=1e-4):
     D_inv = 1. / (D + eps)
     return D_inv * norm.lmo(D_inv * G)
 
-def compute_LR_inv(L, R, order=8, eps_stab=1e-4):
-    p = 1.0 / order
-    
-    L_d = L.double() + eps_stab * torch.eye(L.size(0), device=L.device, dtype=torch.float64)
-    R_d = R.double() + eps_stab * torch.eye(R.size(0), device=R.device, dtype=torch.float64)
+def compute_LR_inv(L, R, order=8, eps_stab=1e-4, use_trace_normalization=False):
+    p = 1.0 / order 
+
+    dim_L = L.size(0)
+    dim_R = R.size(0)
+
+    if use_trace_normalization:
+        trace_L = torch.trace(L)
+        trace_R = torch.trace(R)
+
+        L_tilde = L * (dim_L / (trace_L + eps_stab))
+        R_tilde = R * (dim_R / (trace_R + eps_stab))
+    else:
+        L_tilde = L
+        R_tilde = R
+
+    L_d = L_tilde.double() + eps_stab * torch.eye(dim_L, device=L.device, dtype=torch.float64)
+    R_d = R_tilde.double() + eps_stab * torch.eye(dim_R, device=R.device, dtype=torch.float64)
 
     try:
         sigma_L, U_L = torch.linalg.eigh(L_d)
@@ -454,7 +473,7 @@ def compute_LR_inv(L, R, order=8, eps_stab=1e-4):
 
     L_inv = (U_L @ torch.diag(sigma_L_inv) @ U_L.T).to(L.dtype)
     R_inv = (U_R @ torch.diag(sigma_R_inv) @ U_R.T).to(R.dtype)
-
+    
     return L_inv, R_inv
 
 def weighted_norm_LR_lmo(norm, G, L_inv, R_inv):
