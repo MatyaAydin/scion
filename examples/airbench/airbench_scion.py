@@ -50,6 +50,13 @@ torch.backends.cudnn.benchmark = True
 # The practical impact is that hyperparameter tuning is faster, since this parametrization allows each
 # one to be tuned independently. See https://myrtle.ai/learn/how-to-train-your-resnet-5-hyperparameters/.
 
+def load_study(study_name):
+    storage_name = f"sqlite:///{study_name}.db"
+
+    study = optuna.load_study(study_name=study_name, storage=storage_name)
+    
+    return study
+
 hyp = {
     'meta': {
         'runs': 5,
@@ -655,21 +662,23 @@ if __name__ == "__main__":
             extra_params = {
             "lr": trial.suggest_float("lr", 1e-5, 1e-3, log=True),
             "momentum": trial.suggest_float("momentum", 0.4, 1.),
-            "beta_eucl": trial.suggest_float("beta_eucl", 0.85, 0.999),
-            "beta_spectral": trial.suggest_float("beta_spectral", 0.9, 0.999),
-            "power_frequency": 100, #trial.suggest_int("power_frequency"),
-            "normalize_update": trial.suggest_categorical("normalize_update", [True, False]),
-            "use_trace_normalization": trial.suggest_categorical("use_trace_normalization", [True, False])
+            "beta_LR": trial.suggest_float("beta_LR", 0.85, 0.999),
+            "use_inv": trial.suggest_categorical("use_inv", [True, False]),
+            # "use_bias_correction": trial.suggest_categorical("use_bias_correction", [True, False]),
+            "eps": trial.suggest_float("eps", 1e-12, 1., log=True),
+
             }
 
             constant_ratio = trial.suggest_float("constant_ratio", 0.1, 0.9)
             
             try:
-                acc, _ = main("train", model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="adascion", constant_ratio=constant_ratio, do_plot=False)
+                acc, loss = main("train", model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="scion_steepest", constant_ratio=constant_ratio, do_plot=False)
+                min_loss = np.min(loss)
             except Exception as e:
                 # print(f"Error during optuna trial: {e}")
                 acc= 0.
-            return acc
+                min_loss = 1e6
+            return min_loss
         
         #for log2lr in np.linspace(-9, 0, 10):
         log2lr = math.log2(0.05)
@@ -684,7 +693,7 @@ if __name__ == "__main__":
         }
         scion_params = {
             "lr":2**log2lr,
-            "momentum": momentum
+            "momentum": 0.6
 
         }
         scion_steepest_params = {
@@ -708,7 +717,7 @@ if __name__ == "__main__":
         }
 
         optimizers = {
-            "sgd":sgd_params,
+            # "sgd":sgd_params,
             "scion":scion_params,
             "scion_steepest":scion_steepest_params,
             "adascion":adascion_params
@@ -728,7 +737,7 @@ if __name__ == "__main__":
 
         for param in hparameters_range[hparam]:
 
-            optim = "adascion"
+            optim = "scion"
 
             if hparam != "cst_ratio":
                 optimizers[optim][hparam] = param
@@ -752,24 +761,46 @@ if __name__ == "__main__":
                 print(f"{'='*30}, {hparam}={param} {'='*30}")
                 accs, loss_history = main(1, model_trainbias, model_freezebias, extra_params=optimizers[optim], optimizer_name=optim, constant_ratio=constant_ratio, do_plot=False)
 
-                plt.plot(range(len(loss_history)), loss_history, label=f"{hparam}={param}")
+                plt.plot(range(len(loss_history)), loss_history, label=optim)
             except Exception as e:
                 print(e)
+
+
+        def run_from_hparams(study_name, optimizer_name):
+            study = load_study(study_name)
+
+            best_hparam = study.best_params
+            cst_ratio = best_hparam.pop("constant_ratio")
+
+            acc, loss = main("train", model_trainbias, model_freezebias, extra_params=best_hparam, optimizer_name=optimizer_name, constant_ratio=cst_ratio, do_plot=False)
+
+            return acc, loss
+
+        # acc_steepest, loss_steepest = run_from_hparams("steepestscion-study", "scion_steepest")
+        # acc_ada, loss_ada = run_from_hparams("adascion-study", "adascion")
+
+        # plt.plot(range(len(loss_steepest)), loss_steepest, label="steepest scion")
+        # plt.plot(range(len(loss_ada)), loss_ada, label="adascion")
+
+
+
+        
             
 
         # loss_muon = np.load("./loss/muon_loss_25.npy")
         # plt.plot(range(len(loss_muon)), loss_muon, label="muon")
 
-        # plt.title(r"$\beta$ value")
+        # # plt.title(CIFAR10 training loss")
         # plt.legend(loc="upper right")
         # plt.xlabel("Iteration")
         # plt.ylabel("Loss")
-        # plt.savefig(f"./plots/loss_steepest_inv_{hparam}.png")
+        # plt.savefig(f"./plots/loss_scion_{hparam}.png")
         # plt.clf()
 
-        study_name = "steepestscion-study"  # Unique identifier of the study.
+        study_name = "loss-steepestscion-study"  # Unique identifier of the study.
         storage_name = f"sqlite:///{study_name}.db"
-        study = optuna.create_study(direction="maximize", study_name=study_name, storage=storage_name)
+        # minimize for loss, maximize for accuracy
+        study = optuna.create_study(direction="minimize", study_name=study_name, storage=storage_name)
         study.optimize(objective, n_trials=850)
 
 

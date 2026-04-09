@@ -3,7 +3,7 @@ import torch
 
 
 #######################################################
-# Scion
+# Steepest Scion
 #######################################################
 
 
@@ -256,7 +256,7 @@ class ScionSteepest(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-    op="hadamard", beta_LR=0.999, order=4, eps=1e-8, use_bias_correction=True, reset_buffer_iter=250):
+    op="hadamard", beta_LR=0.999, order=4, eps=1e-8, use_bias_correction=True, reset_buffer_iter=20000, use_inv=False):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -264,7 +264,7 @@ class ScionSteepest(torch.optim.Optimizer):
         if norm_kwargs is None:
             norm_kwargs = {}
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
-        op=op, beta_LR=beta_LR, order=order, eps=eps, use_bias_correction=use_bias_correction, reset_buffer_iter=reset_buffer_iter)
+        op=op, beta_LR=beta_LR, order=order, eps=eps, use_bias_correction=use_bias_correction, reset_buffer_iter=reset_buffer_iter, use_inv=use_inv)
         super().__init__(params, defaults)
         self.dual_norm = 0.
         self.preconditioner_norm = 0.
@@ -282,6 +282,7 @@ class ScionSteepest(torch.optim.Optimizer):
             eps = group["eps"]
             use_bias_correction = group["use_bias_correction"]
             reset_buffer_iter = group["reset_buffer_iter"]
+            use_inv = group["use_inv"]
 
             for p in group['params']:
                 g = p.grad
@@ -302,10 +303,10 @@ class ScionSteepest(torch.optim.Optimizer):
 
 
                 if 'momentum_buffer' not in state.keys():
-                    state['momentum_buffer'] = torch.clone(g_2d)
+                    state['momentum_buffer'] = eps * torch.ones_like(g_2d)
+                    
                 buf = state['momentum_buffer']
-                if iter_number > 1:
-                    buf.mul_(momentum).add_(g_2d, alpha=1. - momentum)
+                buf.mul_(momentum).add_(g_2d, alpha=1. - momentum)
 
 
                 if "L_buffer" not in state.keys():
@@ -325,7 +326,7 @@ class ScionSteepest(torch.optim.Optimizer):
 
                 # reset buffer
                 if iter_number % reset_buffer_iter == 0:
-                    L = torch.min(L) * torch.ones_like(L)
+                    L = torch.min(g_2d)**2 * torch.ones_like(L)
 
                 self.preconditioner_norm = torch.linalg.norm(L, 'fro')
 
@@ -348,7 +349,10 @@ class ScionSteepest(torch.optim.Optimizer):
                     R.mul_(beta_LR).add_(g_2d.T.matmul(g_2d), alpha=1 - beta_LR)
 
                 else:
-                    L.mul_(beta_LR).add_(g_2d * g_2d, alpha=1 - beta_LR)
+                    if use_inv:
+                        L.mul_(beta_LR).add_((g_2d * g_2d).reciprocal_(), alpha=1 - beta_LR)
+                    else:
+                        L.mul_(beta_LR).add_(g_2d * g_2d, alpha=1 - beta_LR)
                     R.mul_(beta_LR).add_(g_2d * g_2d, alpha=1 - beta_LR)
 
 
@@ -359,7 +363,7 @@ class ScionSteepest(torch.optim.Optimizer):
                     m_hat = buf / bias_correction_M
                     p_hat = L.sqrt() / bias_correction_P**0.5
 
-                    lmo_ = weighted_norm_D_lmo(norm_backend, m_hat, p_hat, 1e-8)
+                    lmo_ = weighted_norm_D_lmo(norm_backend, m_hat, p_hat, eps if eps > 1e-12 else 1e-6)
                     dual_norm = (lmo_ * m_hat).sum()
                     self.dual_norm = dual_norm
                     update = scale * lmo_ * dual_norm
