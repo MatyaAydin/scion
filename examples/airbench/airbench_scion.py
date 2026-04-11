@@ -712,7 +712,8 @@ if __name__ == "__main__":
         momentum = 0.9 # 0.6
 
         adam_params = {
-            "lr":3*1e4
+            "lr":3*1e-4,
+            "eps":1e-4,
         }
 
         scion_params = {
