@@ -526,10 +526,10 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
     #     print(f"{k}: {v}")
 
     loss_history = []
-    dual_norm_history = []
-    precond_norm_history = []
     val_accuracies = []
     effective_lrs_group = {}
+    dual_norm_group = {} 
+    precond_norm_group = {}
 
 
     for epoch in range(ceil(epochs)):
@@ -556,9 +556,6 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
 
         starter.record()
 
-        dual_norm_epoch = 0.
-        precond_norm_epoch = 0.
-
         model.train()
         for inputs, labels in train_loader:
             outputs = model(inputs)
@@ -570,19 +567,18 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
             for opt, sched in zip(optimizers, schedulers):
                 opt.step()
                 sched.step()
-                if isinstance(opt, ScionSteepest):
-                    precond_norm_epoch += opt.preconditioner_norm.item()
-                    dual_norm_epoch += opt.dual_norm.item()
+                if isinstance(opt, ScionSteepest) or isinstance(opt, AdaScion):
                     for gidx, eff_val in opt.effective_lrs.items():
-                        effective_lrs_group.setdefault(gidx, []).append(eff_val.item()
-                            if hasattr(eff_val, 'item') else eff_val)
+                        effective_lrs_group.setdefault(gidx, []).append(eff_val.item() if hasattr(eff_val, 'item') else eff_val)
+                    for gidx, val in opt.dual_norms.items():
+                        dual_norm_group.setdefault(gidx, []).append(val.item() if hasattr(val, 'item') else val)
+                    for gidx, val in opt.preconditioner_norms.items():
+                        precond_norm_group.setdefault(gidx, []).append(val.item() if hasattr(val, 'item') else val)
 
             current_steps += 1
             if current_steps >= total_train_steps:
                 break
 
-        dual_norm_history.append(dual_norm_epoch / len(train_loader))
-        precond_norm_history.append(precond_norm_epoch / len(train_loader))
 
 
         ender.record()
@@ -631,17 +627,31 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
             2: "batchnorm biases (BiasRMS)",
             3: "fc head (Sign)",
         }
-        fig, axes = plt.subplots(n_groups, 1, figsize=(10, 3 * n_groups), sharex=True)
-        if n_groups == 1:
-            axes = [axes]
-        for ax, (gidx, vals) in zip(axes, sorted(effective_lrs_group.items())):
-            ax.plot(range(len(vals)), vals)
-            ax.set_title(group_labels.get(gidx, f"group {gidx}"))
-            ax.set_ylabel("Effective LR")
-        ax.set_xlabel("Step")
-        plt.tight_layout()
-        plt.savefig("./plots/effective_lr.png")
-        plt.clf()
+
+        groups_to_plot = {
+            "effective_lr": effective_lrs_group,
+            "dual_norm": dual_norm_group,
+            "precond_norm": precond_norm_group
+        }
+
+        label_per_group = {
+            "effective_lr": "Effective LR",
+            "dual_norm": "Momentum dual norm",
+            "precond_norm": "Preconditioner norm"
+        }
+
+        for k in groups_to_plot.keys():
+            fig, axes = plt.subplots(n_groups, 1, figsize=(10, 3 * n_groups), sharex=True)
+            if n_groups == 1:
+                axes = [axes]
+            for ax, (gidx, vals) in zip(axes, sorted(groups_to_plot[k].items())):
+                ax.plot(range(len(vals)), vals)
+                ax.set_title(group_labels.get(gidx, f"group {gidx}"))
+                ax.set_ylabel(label_per_group[k])
+            ax.set_xlabel("Step")
+            plt.tight_layout()
+            plt.savefig(f"./plots/{k}.png")
+            plt.clf()
 
     starter.record()
     tta_val_acc = evaluate(model, test_loader, tta_level=hyp['net']['tta_level'])

@@ -256,7 +256,7 @@ class ScionSteepest(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-    op="hadamard", beta_LR=0.999, order=4, eps=1e-8, use_bias_correction=True, reset_buffer_iter=20000, use_inv=False):
+    op="hadamard", beta_LR=0.999, order=4, eps=1e-8, use_bias_correction=True, use_inv=False):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -264,10 +264,10 @@ class ScionSteepest(torch.optim.Optimizer):
         if norm_kwargs is None:
             norm_kwargs = {}
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
-        op=op, beta_LR=beta_LR, order=order, eps=eps, use_bias_correction=use_bias_correction, reset_buffer_iter=reset_buffer_iter, use_inv=use_inv)
+        op=op, beta_LR=beta_LR, order=order, eps=eps, use_bias_correction=use_bias_correction, use_inv=use_inv)
         super().__init__(params, defaults)
-        self.dual_norm = 0.
-        self.preconditioner_norm = 0.
+        self.dual_norms = {}
+        self.preconditioner_norm = {}
         self.effective_lrs = {}
 
     def step(self):
@@ -324,12 +324,7 @@ class ScionSteepest(torch.optim.Optimizer):
                 L = state["L_buffer"]
                 R = state["R_buffer"]
 
-
-                # reset buffer
-                if iter_number % reset_buffer_iter == 0:
-                    L = torch.min(g_2d)**2 * torch.ones_like(L)
-
-                self.preconditioner_norm = torch.linalg.norm(L, 'fro')
+                self.preconditioner_norms[group_idx] = torch.linalg.norm(L, 'fro')
 
                 # if iter_number % 100 == 0:
 
@@ -366,7 +361,7 @@ class ScionSteepest(torch.optim.Optimizer):
 
                     lmo_ = weighted_norm_D_lmo(norm_backend, m_hat, p_hat, eps if eps > 1e-12 else 1e-6)
                     dual_norm = (lmo_ * m_hat).sum()
-                    self.dual_norm = dual_norm
+                    self.dual_norms[group_idx] = dual_norm
                     update = scale * lmo_ * dual_norm
                     effective_lr = scale * dual_norm * lr
                     self.effective_lrs[group_idx] = effective_lr
