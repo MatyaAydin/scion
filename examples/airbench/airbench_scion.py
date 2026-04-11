@@ -529,7 +529,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
     dual_norm_history = []
     precond_norm_history = []
     val_accuracies = []
-    effective_lrs = []
+    effective_lrs_group = {}
 
 
     for epoch in range(ceil(epochs)):
@@ -573,7 +573,9 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
                 if isinstance(opt, ScionSteepest):
                     precond_norm_epoch += opt.preconditioner_norm.item()
                     dual_norm_epoch += opt.dual_norm.item()
-                    effective_lrs.append(opt.effective_lr)
+                    for gidx, eff_val in opt.effective_lrs.items():
+                        effective_lrs_per_group.setdefault(gidx, []).append(eff_val.item()
+                            if hasattr(eff_val, 'item') else eff_val)
 
             current_steps += 1
             if current_steps >= total_train_steps:
@@ -622,7 +624,22 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
         # plt.savefig(f"./plots/dual_and_precond_norm_steepest.png")
         # plt.clf()
 
-        plt.plot(range(len(effective_lrs)), effective_lrs)
+        n_groups = len(effective_lrs_per_group)
+        group_labels = {
+            0: "first_layer (SpectralConv)",
+            1: "conv layers (SpectralConv)",
+            2: "batchnorm biases (BiasRMS)",
+            3: "fc head (Sign)",
+        }
+        fig, axes = plt.subplots(n_groups, 1, figsize=(10, 3 * n_groups), sharex=True)
+        if n_groups == 1:
+            axes = [axes]
+        for ax, (gidx, vals) in zip(axes, sorted(effective_lrs_per_group.items())):
+            ax.plot(range(len(vals)), vals)
+            ax.set_title(group_labels.get(gidx, f"group {gidx}"))
+            ax.set_ylabel("Effective LR")
+        ax.set_xlabel("Step")
+        plt.tight_layout()
         plt.savefig("./plots/effective_lr.png")
         plt.clf()
 
@@ -697,7 +714,7 @@ if __name__ == "__main__":
         adam_params = {
             "lr":3*1e4
         }
-        
+
         scion_params = {
             "lr":2**log2lr,
             "momentum": 0.6
