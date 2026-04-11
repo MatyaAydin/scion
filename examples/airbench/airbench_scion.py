@@ -605,7 +605,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
     #  TTA Evaluation  #
     ####################
 
-    if optimizer_name == "scion_steepest" and do_plot:
+    if (optimizer_name == "scion_steepest" or optimizer_name == "adascion") and do_plot:
         # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
         
         # epochs_range = range(len(dual_norm_history))

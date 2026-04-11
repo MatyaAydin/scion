@@ -274,9 +274,10 @@ class AdaScion(torch.optim.Optimizer):
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
         beta_eucl=beta_eucl, beta_spectral=beta_spectral, order=order, eps=eps, power_frequency=power_frequency, normalize_update=normalize_update, use_trace_normalization=use_trace_normalization)
         super().__init__(params, defaults)
+        self.effective_lrs = {}
 
     def step(self):
-        for group in self.param_groups:
+        for group_idx, group in enumerate(self.param_groups):
             lr = group['lr']
             momentum = group['momentum']
             scale = group['scale']
@@ -331,7 +332,8 @@ class AdaScion(torch.optim.Optimizer):
                     if normalize_update:
                         dual_norm /= min(g_2d.shape[0], g_2d.shape[1])
                     update = scale * lmo_ * dual_norm
-
+                    effective_lr = scale * dual_norm * lr
+                    self.effective_lrs[group_idx] = effective_lr
 
                 else: # spectral
 
