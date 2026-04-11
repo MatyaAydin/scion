@@ -610,4 +610,4 @@ if __name__ == "__main__":
     main('warmup', model_trainbias, model_freezebias)
     accs, loss = main("train", model_trainbias, model_freezebias)
 
-    np.save("./loss/muon_loss_25.npy", loss)
+    # np.save("./loss/muon_loss_25.npy", loss)

@@ -30,7 +30,7 @@ from scion_LR import ScionSteepest
 from scion import Scion
 from ada_scion import AdaScion
 
-from torch.optim import AdamW, SGD
+from torch.optim import AdamW
 
 # ADDED
 import torch._dynamo
@@ -486,13 +486,13 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
 
         all_params = [p for p in model.parameters() if p.requires_grad]
         
-        optimizer_trainbias = SGD(all_params, **extra_params)
-        optimizer2_trainbias = SGD([whiten_bias], **extra_params)
+        optimizer_trainbias = AdamW(all_params, **extra_params)
+        optimizer2_trainbias = AdamW([whiten_bias], **extra_params)
         
         # freezebias model params
         model = model_freezebias
         all_params_freeze = [p for p in model.parameters() if p.requires_grad]
-        optimizer_freezebias = SGD(all_params_freeze, **extra_params)
+        optimizer_freezebias = AdamW(all_params_freeze, **extra_params)
         model = model_trainbias  # reset model ref back
 
         def get_lr(step):
@@ -528,6 +528,8 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
     loss_history = []
     dual_norm_history = []
     precond_norm_history = []
+    val_accuracies = []
+    effective_lrs = []
 
 
     for epoch in range(ceil(epochs)):
@@ -571,6 +573,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
                 if isinstance(opt, ScionSteepest):
                     precond_norm_epoch += opt.preconditioner_norm.item()
                     dual_norm_epoch += opt.dual_norm.item()
+                    effective_lrs.append(opt.effective_lr)
 
             current_steps += 1
             if current_steps >= total_train_steps:
@@ -592,6 +595,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
         train_acc = (outputs.detach().argmax(1) == labels).float().mean().item()
         train_loss = loss.item() / batch_size
         val_acc = evaluate(model, test_loader, tta_level=0)
+        val_accuracies.append(val_acc)
         print_training_details(locals(), is_final_entry=False)
         run = None # Only print the run number once
 
@@ -600,22 +604,26 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
     ####################
 
     if optimizer_name == "scion_steepest" and do_plot:
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+        # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
         
-        epochs_range = range(len(dual_norm_history))
+        # epochs_range = range(len(dual_norm_history))
         
-        ax1.plot(epochs_range, dual_norm_history)
-        ax1.set_xlabel("Epoch")
-        ax1.set_ylabel("Value")
-        ax1.set_title("Dual norm")
+        # ax1.plot(epochs_range, dual_norm_history)
+        # ax1.set_xlabel("Epoch")
+        # ax1.set_ylabel("Value")
+        # ax1.set_title("Dual norm")
         
-        ax2.plot(epochs_range, precond_norm_history)
-        ax2.set_xlabel("Epoch")
-        ax2.set_ylabel("Value")
-        ax2.set_title("Preconditioner norm")
+        # ax2.plot(epochs_range, precond_norm_history)
+        # ax2.set_xlabel("Epoch")
+        # ax2.set_ylabel("Value")
+        # ax2.set_title("Preconditioner norm")
         
-        plt.tight_layout()
-        plt.savefig(f"./plots/dual_and_precond_norm_stepratio.png")
+        # plt.tight_layout()
+        # plt.savefig(f"./plots/dual_and_precond_norm_steepest.png")
+        # plt.clf()
+
+        plt.plot(range(len(effective_lrs)), effective_lrs)
+        plt.savefig("./plots/effective_lr.png")
         plt.clf()
 
     starter.record()
@@ -628,7 +636,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
     print_training_details(locals(), is_final_entry=True)
 
 
-    return tta_val_acc, np.array(loss_history)
+    return tta_val_acc, np.array(loss_history), np.array(val_accuracies)
 
 
 #######################################################
@@ -655,42 +663,41 @@ if __name__ == "__main__":
 
         print_columns(logging_columns_list, is_head=True)
         extra_params = {"lr":3*1e-4}
-        main('warmup', model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="sgd")
+        main('warmup', model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="adamw")
 
         def objective(trial):
 
             extra_params = {
             "lr": trial.suggest_float("lr", 1e-5, 1e-3, log=True),
             "momentum": trial.suggest_float("momentum", 0.4, 1.),
-            "beta_LR": trial.suggest_float("beta_LR", 0.85, 0.999),
-            "use_inv": trial.suggest_categorical("use_inv", [True, False]),
-            # "use_bias_correction": trial.suggest_categorical("use_bias_correction", [True, False]),
-            "eps": trial.suggest_float("eps", 1e-12, 1., log=True),
-
+            "beta_eucl": trial.suggest_float("beta_eucl", 0.85, 0.999),
+            "beta_spectral": trial.suggest_float("beta_spectral", 0.9, 0.999),
+            "power_frequency": 100, #trial.suggest_int("power_frequency"),
+            # "normalize_update": trial.suggest_categorical("normalize_update", [True, False]),
+            # "use_trace_normalization": trial.suggest_categorical("use_trace_normalization", [True, False])
             }
 
             constant_ratio = trial.suggest_float("constant_ratio", 0.1, 0.9)
             
             try:
-                acc, loss = main("train", model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="scion_steepest", constant_ratio=constant_ratio, do_plot=False)
-                min_loss = np.min(loss)
+                acc, loss, _ = main("train", model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="adascion", constant_ratio=constant_ratio, do_plot=False)
+                min_loss = float(np.nanmin(loss))
+                        
+                if np.isnan(min_loss) or np.isinf(min_loss):
+                    raise optuna.TrialPruned("Model diverged: NaN or Inf loss detected.")
+                    
             except Exception as e:
-                # print(f"Error during optuna trial: {e}")
-                acc= 0.
-                min_loss = 1e6
+                raise optuna.TrialPruned(f"Trial failed due to exception: {e}")          
             return min_loss
         
         #for log2lr in np.linspace(-9, 0, 10):
         log2lr = math.log2(0.05)
         momentum = 0.9 # 0.6
 
-
-        sgd_params = {
-            "lr":3*1e-4,
-            "nesterov":True,
-            "momentum": 0.85
-
+        adam_params = {
+            "lr":3*1e4
         }
+        
         scion_params = {
             "lr":2**log2lr,
             "momentum": 0.6
@@ -717,7 +724,7 @@ if __name__ == "__main__":
         }
 
         optimizers = {
-            # "sgd":sgd_params,
+            "adamw":adam_params,
             "scion":scion_params,
             "scion_steepest":scion_steepest_params,
             "adascion":adascion_params
@@ -759,48 +766,48 @@ if __name__ == "__main__":
 
             try:
                 print(f"{'='*30}, {hparam}={param} {'='*30}")
-                accs, loss_history = main(1, model_trainbias, model_freezebias, extra_params=optimizers[optim], optimizer_name=optim, constant_ratio=constant_ratio, do_plot=False)
+                accs, loss_history, val_accs = main(1, model_trainbias, model_freezebias, extra_params=optimizers[optim], optimizer_name=optim, constant_ratio=constant_ratio, do_plot=False)
 
-                plt.plot(range(len(loss_history)), loss_history, label=optim)
+                plt.plot(range(len(val_accs)), val_accs, label=optim)
             except Exception as e:
                 print(e)
 
 
-        def run_from_hparams(study_name, optimizer_name):
+        def run_from_hparams(study_name, optimizer_name, do_plot=False):
             study = load_study(study_name)
 
             best_hparam = study.best_params
             cst_ratio = best_hparam.pop("constant_ratio")
 
-            acc, loss = main("train", model_trainbias, model_freezebias, extra_params=best_hparam, optimizer_name=optimizer_name, constant_ratio=cst_ratio, do_plot=False)
+            acc, loss, val_accs = main("train", model_trainbias, model_freezebias, extra_params=best_hparam, optimizer_name=optimizer_name, constant_ratio=cst_ratio, do_plot=do_plot)
 
-            return acc, loss
+            return acc, loss, val_accs
 
-        # acc_steepest, loss_steepest = run_from_hparams("steepestscion-study", "scion_steepest")
-        # acc_ada, loss_ada = run_from_hparams("adascion-study", "adascion")
+        acc_steepest, loss_steepest, val_accs_steepest = run_from_hparams("steepestscion-study", "scion_steepest", do_plot=True)
+        # acc_ada, loss_ada, val_accs_ada = run_from_hparams("adascion-study", "adascion")
 
         # plt.plot(range(len(loss_steepest)), loss_steepest, label="steepest scion")
         # plt.plot(range(len(loss_ada)), loss_ada, label="adascion")
 
+        # plt.plot(range(len(val_accs_steepest)), val_accs_steepest, label="steepest scion")
+        # plt.plot(range(len(val_accs_ada)), val_accs_ada, label="adascion")
 
 
         
-            
-
         # loss_muon = np.load("./loss/muon_loss_25.npy")
         # plt.plot(range(len(loss_muon)), loss_muon, label="muon")
 
-        # # plt.title(CIFAR10 training loss")
-        # plt.legend(loc="upper right")
+        # plt.title("CIFAR10 validation accuracy")
+        # plt.legend(loc="lower right")
         # plt.xlabel("Iteration")
-        # plt.ylabel("Loss")
-        # plt.savefig(f"./plots/loss_scion_{hparam}.png")
+        # plt.ylabel("Accuracy")
+        # plt.savefig(f"./plots/val_acc_comparison.png")
         # plt.clf()
 
-        study_name = "loss-steepestscion-study"  # Unique identifier of the study.
-        storage_name = f"sqlite:///{study_name}.db"
-        # minimize for loss, maximize for accuracy
-        study = optuna.create_study(direction="minimize", study_name=study_name, storage=storage_name)
-        study.optimize(objective, n_trials=850)
+        # study_name = "loss-adascion-study"  # Unique identifier of the study.
+        # storage_name = f"sqlite:///{study_name}.db"
+        # # minimize for loss, maximize for accuracy
+        # study = optuna.create_study(direction="minimize", study_name=study_name, storage=storage_name)
+        # study.optimize(objective, n_trials=850)
 
 

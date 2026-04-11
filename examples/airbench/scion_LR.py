@@ -268,6 +268,7 @@ class ScionSteepest(torch.optim.Optimizer):
         super().__init__(params, defaults)
         self.dual_norm = 0.
         self.preconditioner_norm = 0.
+        self.effective_lr = 0.
 
     def step(self):
         for group in self.param_groups:
@@ -367,6 +368,7 @@ class ScionSteepest(torch.optim.Optimizer):
                     dual_norm = (lmo_ * m_hat).sum()
                     self.dual_norm = dual_norm
                     update = scale * lmo_ * dual_norm
+                    self.effective_lr = scale * dual_norm * lr
 
                     # print(f"{'='*30} Iter number {iter_number} {'='*30}")
                     # print(f"m_hat: min={m_hat.min()}, max={m_hat.max()}")
@@ -375,6 +377,7 @@ class ScionSteepest(torch.optim.Optimizer):
                     # print(f"dual_norm: {dual_norm}")
                 else:
                     self.dual_norm = 0.
+                    self.effective_lr = 0.
                     update = scale * weighted_norm_LR_lmo(norm_backend, g_2d, L, R, order=order)
                 update = update.reshape(g.shape)
 
