@@ -364,6 +364,8 @@ class AdaScion(torch.optim.Optimizer):
                     if normalize_update:
                         dual_norm /= min(g_2d.shape[0], g_2d.shape[1])
                     update = scale * lmo_ * dual_norm
+                    effective_lr = scale * dual_norm * lr
+                    self.effective_lrs[group_idx] = effective_lr
 
 
 
