@@ -574,7 +574,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
                     precond_norm_epoch += opt.preconditioner_norm.item()
                     dual_norm_epoch += opt.dual_norm.item()
                     for gidx, eff_val in opt.effective_lrs.items():
-                        effective_lrs_per_group.setdefault(gidx, []).append(eff_val.item()
+                        effective_lrs_group.setdefault(gidx, []).append(eff_val.item()
                             if hasattr(eff_val, 'item') else eff_val)
 
             current_steps += 1
@@ -624,7 +624,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
         # plt.savefig(f"./plots/dual_and_precond_norm_steepest.png")
         # plt.clf()
 
-        n_groups = len(effective_lrs_per_group)
+        n_groups = len(effective_lrs_group)
         group_labels = {
             0: "first_layer (SpectralConv)",
             1: "conv layers (SpectralConv)",
@@ -634,7 +634,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
         fig, axes = plt.subplots(n_groups, 1, figsize=(10, 3 * n_groups), sharex=True)
         if n_groups == 1:
             axes = [axes]
-        for ax, (gidx, vals) in zip(axes, sorted(effective_lrs_per_group.items())):
+        for ax, (gidx, vals) in zip(axes, sorted(effective_lrs_group.items())):
             ax.plot(range(len(vals)), vals)
             ax.set_title(group_labels.get(gidx, f"group {gidx}"))
             ax.set_ylabel("Effective LR")

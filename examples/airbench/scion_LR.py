@@ -271,7 +271,7 @@ class ScionSteepest(torch.optim.Optimizer):
         self.effective_lrs = {}
 
     def step(self):
-        for group in self.param_groups:
+        for group_idx, group in enumerate(self.param_groups):
             lr = group['lr']
             momentum = group['momentum']
             scale = group['scale']
@@ -387,7 +387,7 @@ class ScionSteepest(torch.optim.Optimizer):
                 p.data.add_(update, alpha=-lr)
 
     def init(self):
-        for group_idx, group in enumerate(self.param_groups):
+        for group in self.param_groups:
             norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
             init_func = norm_backend.init
             scale = group['scale']
