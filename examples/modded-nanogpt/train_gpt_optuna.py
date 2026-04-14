@@ -454,7 +454,7 @@ def main(optim_params):
         print(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
 
     # NOTE: Clean up nice removed from here. Handled globally at the end of the script.
-    return train_loss_history
+    return train_loss_history[:args.num_iterations]
 
 
 def objective(trial):
