@@ -463,7 +463,7 @@ def objective(trial):
     device = torch.device(f'cuda:{local_rank}')
 
     # 2. Wrap the trial. Rank 0 passes a real trial object, others pass `None`.
-    dist_trial = TorchDistributedTrial(trial, device=device)
+    dist_trial = TorchDistributedTrial(trial)
 
     # 3. Use `dist_trial` exactly like you would use a normal trial.
     optim_params = {
