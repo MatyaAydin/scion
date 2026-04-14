@@ -1,4 +1,3 @@
-
 # Modified from: https://github.com/KellerJordan/modded-nanogpt/blob/master/records/101724_DistributedMuon/22d24867-eb5a-4fcc-ae2c-263d0277dfd1.txt
 import os
 import sys
@@ -18,9 +17,10 @@ import torch.distributed as dist
 import torch._inductor.config as config
 from torch.nn.parallel import DistributedDataParallel as DDP
 import optuna
+from optuna.integration import TorchDistributedTrial
 
 from steepest_scion import ScionSteepest
-
+from datargs import parse
 
 # -----------------------------------------------------------------------------
 # PyTorch nn.Module definitions for the GPT-2 model
@@ -263,21 +263,16 @@ class Hyperparameters:
     scale : float = 50
     last_scale : float = 3000
 
-from datargs import parse
-
-
 def main(optim_params):
     args = parse(Hyperparameters)
 
-    # set up DDP (distributed data parallel). torchrun sets this env variable
+    # NOTE: DDP initialized globally in the main block now
     assert torch.cuda.is_available()
-    dist.init_process_group(backend='nccl')
     ddp_rank = int(os.environ['RANK'])
     ddp_local_rank = int(os.environ['LOCAL_RANK'])
     ddp_world_size = int(os.environ['WORLD_SIZE'])
     device = f'cuda:{ddp_local_rank}'
     torch.cuda.set_device(device)
-    print(f"using device: {device}")
     master_process = (ddp_rank == 0) # this process will do logging, checkpointing etc.
 
     if master_process:
@@ -420,10 +415,6 @@ def main(optim_params):
             torch.cuda.synchronize()
             t0 = time.time()
 
-        # bit confusing: we want to make sure to eval on 0th iteration
-        # but also after the very last iteration. so we loop for step <= num_iterations
-        # instead of just < num_iterations (one extra due to <=), only to do
-        # the validation/sampling one last time, and then we break right here as we're done.
         if last_step:
             break
 
@@ -452,9 +443,7 @@ def main(optim_params):
         # null the gradients
         model.zero_grad(set_to_none=True)
         # --------------- TRAINING SECTION END -------------------
-        # everything that follows now is just diagnostics, prints, logging, etc.
 
-        #dist.all_reduce(train_loss, op=dist.ReduceOp.AVG) # all-reducing the training loss would be more correct in terms of logging, but slower
         if master_process:
             approx_time = training_time_ms + 1000 * (time.time() - t0)
             print(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} train_time:{approx_time:.0f}ms step_avg:{approx_time/timed_steps:.2f}ms")
@@ -464,35 +453,71 @@ def main(optim_params):
     if master_process:
         print(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
 
-    # -------------------------------------------------------------------------
-    # clean up nice
-    dist.destroy_process_group()
-
+    # NOTE: Clean up nice removed from here. Handled globally at the end of the script.
     return train_loss_history
 
 
 def objective(trial):
+    # 1. Get the local device for NCCL synchronization
+    local_rank = int(os.environ['LOCAL_RANK'])
+    device = torch.device(f'cuda:{local_rank}')
 
+    # 2. Wrap the trial. Rank 0 passes a real trial object, others pass `None`.
+    dist_trial = TorchDistributedTrial(trial, device=device)
+
+    # 3. Use `dist_trial` exactly like you would use a normal trial.
     optim_params = {
-        "lr": trial.suggest_float("lr", 1e-6, 1e-4, log=True),
-        "beta_LR": trial.suggest_float("beta_LR", ),
-        "momentum": trial.suggest_float("momentum", 0.4, 1.),
-        "eps": trial.suggest_float("eps", 1e-12, 1., log=True),
-        "use_bias_correction": trial.suggest_categorical("use_bias_correction", [True, False])
+        "lr": dist_trial.suggest_float("lr", 1e-6, 1e-4, log=True),
+        "beta_LR": dist_trial.suggest_float("beta_LR", 0.85, 0.999), # Added missing boundaries
+        "momentum": dist_trial.suggest_float("momentum", 0.4, 1.),
+        "eps": dist_trial.suggest_float("eps", 1e-12, 1., log=True),
+        "use_bias_correction": dist_trial.suggest_categorical("use_bias_correction", [True, False])
     }
 
     try:
+        # Train the model
         loss = main(optim_params)
         min_loss = float(np.nanmin(loss))
 
         if np.isnan(min_loss) or np.isinf(min_loss):
             raise optuna.TrialPruned("Model diverged: NaN or Inf loss detected.")
 
+        return min_loss
+
     except Exception as e:
         raise optuna.TrialPruned(f"Trial failed due to exception: {e}")
-    
 
-study_name = "gpt-train-loss-steepestscion-study"
-storage_name = f"sqlite:///{study_name}.db"
-study = optuna.create_study(direction="minimize", study_name=study_name, storage=storage_name)
-study.optimize(objective, n_trials=150)
+# -----------------------------------------------------------------------------
+# DDP & Optuna Orchestration
+
+if __name__ == "__main__":
+    # Initialize process group ONCE for the entire study execution
+    dist.init_process_group(backend='nccl')
+    rank = int(os.environ['RANK'])
+
+    study_name = "gpt-train-loss-steepestscion-study"
+    storage_name = f"sqlite:///{study_name}.db"
+    n_trials = 150
+
+    # Rank 0 handles the database and orchestrates the study
+    if rank == 0:
+        study = optuna.create_study(
+            direction="minimize", 
+            study_name=study_name, 
+            storage=storage_name, 
+            load_if_exists=True
+        )
+        study.optimize(objective, n_trials=n_trials)
+        
+    # Worker ranks pass `None` to the objective in a loop
+    else:
+        for _ in range(n_trials):
+            try:
+                objective(None)
+            except optuna.TrialPruned:
+                # If Rank 0 prunes, TorchDistributedTrial propagates the exception via NCCL
+                # We catch it gracefully here to move to the next trial
+                pass
+
+    # Clean up DDP once the whole study finishes
+    dist.destroy_process_group()
