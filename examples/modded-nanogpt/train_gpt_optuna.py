@@ -262,7 +262,7 @@ class Hyperparameters:
     unconstrained : bool = False
     momentum: float = 0.9#0.1
     scale : float = 50
-    last_scale : float = 3000
+    last_scale : float = 100
 
 def main(optim_params):
     args = parse(Hyperparameters)
@@ -279,6 +279,9 @@ def main(optim_params):
     if master_process:
         print("======== Arguments ========")
         print(args)
+        print("===========================")
+        print("======== Optimizer params ========")
+        print(optim_params)
         print("===========================")
         
     # convenience variables
@@ -397,10 +400,10 @@ def main(optim_params):
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
             val_loss /= val_steps
             # log val loss to console and to logfile
-            if master_process:
+            if master_process and step % 100 == 0:
                 print(f'step:{step}/{args.num_iterations} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms/(timed_steps-1):.2f}ms')
-                with open(logfile, "a") as f:
-                    f.write(f'step:{step}/{args.num_iterations} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms/(timed_steps-1):.2f}ms\n')
+            with open(logfile, "a") as f:
+                f.write(f'step:{step}/{args.num_iterations} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms/(timed_steps-1):.2f}ms\n')
             # start the clock again
             torch.cuda.synchronize()
             t0 = time.time()
@@ -426,6 +429,8 @@ def main(optim_params):
             with ctx:
                 _, loss = model(x, y, return_logits=False)
                 train_loss = loss.detach()
+                if torch.isnan(train_loss) or torch.isinf(train_loss) or train_loss > 100:
+                    raise optuna.TrialPruned("Diverged")
                 train_loss_history[step] += train_loss.item() / train_accumulation_steps
             # advance the dataset for the next batch
             x, y = train_loader.next_batch()
