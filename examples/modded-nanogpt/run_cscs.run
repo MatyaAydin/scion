@@ -10,9 +10,9 @@
 #SBATCH --output=result_%j.out      # Standard output file (%j expands to jobID)
 #SBATCH --error=error_%j.err
 
-pip install -r requirements.txt
-pip install -r data/requirements.txt
+pip install -r /users/maydin/scion/examples/modded-nanogpt/requirements.txt
+pip install -r /users/maydin/scion/examples/modded-nanogpt/data/requirements.txt
 pip install optuna
 pip install optuna-integration[pytorch_distributed]
 
-torchrun --standalone --nproc_per_node=4 train_gpt_optuna.py
+torchrun --standalone --nproc_per_node=4 /users/maydin/scion/examples/modded-nanogpt/train_gpt_optuna.py
