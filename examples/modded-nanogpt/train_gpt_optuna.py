@@ -18,7 +18,7 @@ import torch._inductor.config as config
 from torch.nn.parallel import DistributedDataParallel as DDP
 import optuna
 from optuna.integration import TorchDistributedTrial
-from optuna.storages import JournalStorage, JournalFileBackend
+from optuna.storages import JournalStorage, JournalFileStorage
 
 from steepest_scion import ScionSteepest
 from datargs import parse
@@ -497,7 +497,7 @@ if __name__ == "__main__":
     rank = int(os.environ['RANK'])
 
     study_name = "gpt-train-loss-steepestscion-study"
-    storage = JournalStorage(JournalFileBackend(f"{study_name}.log"))
+    storage = JournalStorage(JournalFileStorage(f"{study_name}.log"))
     n_trials = 150
 
     # Rank 0 handles the database and orchestrates the study
