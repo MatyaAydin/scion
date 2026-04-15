@@ -10,6 +10,8 @@
 #SBATCH --output=result_%j.out      # Standard output file (%j expands to jobID)
 #SBATCH --error=error_%j.err
 
+cd /users/maydin/scion/examples/modded-nanogpt
+
 pip install -r /users/maydin/scion/examples/modded-nanogpt/requirements.txt
 pip install -r /users/maydin/scion/examples/modded-nanogpt/data/requirements.txt
 pip install optuna
