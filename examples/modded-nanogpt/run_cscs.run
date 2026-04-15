@@ -14,7 +14,7 @@ cd /iopsstor/scratch/cscs/maydin/scion/examples/modded-nanogpt
 
 pip install -r ./requirements.txt
 pip install -r ./data/requirements.txt
-pip install optuna
+pip install --no-cache-dir --upgrade "optuna==3.6.0"
 pip install optuna-integration[pytorch_distributed]
 
 python3 ./data/cached_fineweb10B.py 8 
