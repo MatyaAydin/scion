@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=train_modded_gpt_optuna
-#SBATCH --time=6:00:00
+#SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=288
@@ -17,4 +17,5 @@ pip install -r /users/maydin/scion/examples/modded-nanogpt/data/requirements.txt
 pip install optuna
 pip install optuna-integration[pytorch_distributed]
 
+python3 data/cached_fineweb10B.py 8 
 torchrun --standalone --nproc_per_node=4 /users/maydin/scion/examples/modded-nanogpt/train_gpt_optuna.py
