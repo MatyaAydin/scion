@@ -18,6 +18,7 @@ import torch._inductor.config as config
 from torch.nn.parallel import DistributedDataParallel as DDP
 import optuna
 from optuna.integration import TorchDistributedTrial
+from optuna.storages import JournalStorage, JournalFileBackend
 
 from steepest_scion import ScionSteepest
 from datargs import parse
@@ -425,7 +426,7 @@ def main(optim_params):
             with ctx:
                 _, loss = model(x, y, return_logits=False)
                 train_loss = loss.detach()
-                train_loss_history[step] = train_loss.item() 
+                train_loss_history[step] += train_loss.item() / train_accumulation_steps
             # advance the dataset for the next batch
             x, y = train_loader.next_batch()
             # backward pass
@@ -496,7 +497,7 @@ if __name__ == "__main__":
     rank = int(os.environ['RANK'])
 
     study_name = "gpt-train-loss-steepestscion-study"
-    storage_name = f"sqlite:///{study_name}.db"
+    storage = JournalStorage(JournalFileBackend(f"{study_name}.log"))
     n_trials = 150
 
     # Rank 0 handles the database and orchestrates the study
@@ -504,7 +505,7 @@ if __name__ == "__main__":
         study = optuna.create_study(
             direction="minimize", 
             study_name=study_name, 
-            storage=storage_name, 
+            storage=storage, 
             load_if_exists=True
         )
         study.optimize(objective, n_trials=n_trials)
