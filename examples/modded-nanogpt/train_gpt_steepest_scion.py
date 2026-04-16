@@ -468,9 +468,9 @@ if __name__ == "__main__":
     dist.init_process_group(backend='nccl')
     args = parse(Hyperparameters)
     optim_args = {
-        "lr":5*1e-5, 
-        "momentum": 0.85,
-        "beta_LR": 0.99, 
+        "lr":5*1e-6, 
+        "momentum": 0.9,
+        "beta_LR": 0.999, 
         "eps": 1e-4
     }
 
