@@ -1,5 +1,6 @@
 import math
 import torch
+import torch.distributed as dist
 
 
 #######################################################
@@ -256,7 +257,7 @@ class ScionSteepest(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-    op="hadamard", beta_LR=0.999, order=4, eps=1., use_bias_correction=True):
+    op="hadamard", beta_LR=0.999, order=4, eps=1.):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -264,10 +265,10 @@ class ScionSteepest(torch.optim.Optimizer):
         if norm_kwargs is None:
             norm_kwargs = {}
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
-        op=op, beta_LR=beta_LR, order=order, eps=eps, use_bias_correction=use_bias_correction)
+        op=op, beta_LR=beta_LR, order=order, eps=eps)
         super().__init__(params, defaults)
-        self.dual_norm = 0.
-        self.preconditioner_norm = 0.
+        self.dual_norms = {}
+
 
     def step(self):
         for group in self.param_groups:
@@ -280,7 +281,6 @@ class ScionSteepest(torch.optim.Optimizer):
             order = group["order"]
             beta_LR = group["beta_LR"]
             eps = group["eps"]
-            use_bias_correction = group["use_bias_correction"]
 
             for p in group['params']:
                 g = p.grad
@@ -326,11 +326,10 @@ class ScionSteepest(torch.optim.Optimizer):
 
                     lmo_ = weighted_norm_D_lmo(norm_backend, g_2d, L, 1e-8)
                     dual_norm = (lmo_ * g_2d).sum()
-                    self.dual_norm = dual_norm
+                    self.dual_norms[group['norm']] = dual_norm
                     update = scale * lmo_ * dual_norm
 
                 else:
-                    self.dual_norm = 0.
                     update = scale * weighted_norm_LR_lmo(norm_backend, g_2d, L, R, order=order)
                 update = update.reshape(g.shape)
 
