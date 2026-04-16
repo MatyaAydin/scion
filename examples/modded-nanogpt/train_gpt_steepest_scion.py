@@ -265,6 +265,28 @@ class Hyperparameters:
 
 
 def main(args, optim_args):
+    # set up DDP (distributed data parallel). torchrun sets this env variable
+    ddp_rank = int(os.environ['RANK'])
+    ddp_local_rank = int(os.environ['LOCAL_RANK'])
+    ddp_world_size = int(os.environ['WORLD_SIZE'])
+    device = f'cuda:{ddp_local_rank}'
+    torch.cuda.set_device(device)
+    print(f"using device: {device}")
+    master_process = (ddp_rank == 0) # this process will do logging, checkpointing etc.
+
+    if master_process:
+        print("======== Arguments ========")
+        print(args)
+        print("===========================")
+        
+    # convenience variables
+    B, T = args.device_batch_size, args.sequence_length
+    # calculate the number of steps to take in the val loop.
+    assert args.val_tokens % (B * T * ddp_world_size) == 0
+    val_steps = args.val_tokens // (B * T * ddp_world_size)
+    # calculate the steps of gradient accumulation required to attain the desired global batch size.
+    assert args.batch_size % (B * ddp_world_size) == 0
+    train_accumulation_steps = args.batch_size // (B * ddp_world_size)
     # load tokens
     train_loader = DistributedDataLoader(args.input_bin, B, T, ddp_rank, ddp_world_size)
     val_loader = DistributedDataLoader(args.input_val_bin, B, T, ddp_rank, ddp_world_size)
@@ -441,11 +463,9 @@ def main(args, optim_args):
 
     return train_loss_history[:args.num_iterations]
 
-# -------------------------------------------------------------------------
-# clean up nice
-dist.destroy_process_group()
-
 if __name__ == "__main__":
+    assert torch.cuda.is_available()
+    dist.init_process_group(backend='nccl')
     args = parse(Hyperparameters)
     optim_args = {
         "lr":5*1e-5, 
@@ -454,29 +474,6 @@ if __name__ == "__main__":
         "eps": 1e-4
     }
 
-    # set up DDP (distributed data parallel). torchrun sets this env variable
-    assert torch.cuda.is_available()
-    dist.init_process_group(backend='nccl')
-    ddp_rank = int(os.environ['RANK'])
-    ddp_local_rank = int(os.environ['LOCAL_RANK'])
-    ddp_world_size = int(os.environ['WORLD_SIZE'])
-    device = f'cuda:{ddp_local_rank}'
-    torch.cuda.set_device(device)
-    print(f"using device: {device}")
-    master_process = (ddp_rank == 0) # this process will do logging, checkpointing etc.
-
-    if master_process:
-        print("======== Arguments ========")
-        print(args)
-        print("===========================")
-        
-    # convenience variables
-    B, T = args.device_batch_size, args.sequence_length
-    # calculate the number of steps to take in the val loop.
-    assert args.val_tokens % (B * T * ddp_world_size) == 0
-    val_steps = args.val_tokens // (B * T * ddp_world_size)
-    # calculate the steps of gradient accumulation required to attain the desired global batch size.
-    assert args.batch_size % (B * ddp_world_size) == 0
-    train_accumulation_steps = args.batch_size // (B * ddp_world_size)
-
     train_loss = main(args, optim_args)
+
+    dist.destroy_process_group()
