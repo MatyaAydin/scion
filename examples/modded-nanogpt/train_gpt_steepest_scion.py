@@ -471,7 +471,7 @@ if __name__ == "__main__":
         "lr":5*1e-6, 
         "momentum": 0.9,
         "beta_LR": 0.999, 
-        "eps": 1e-4
+        "eps": 1.
     }
 
     train_loss = main(args, optim_args)
