@@ -425,21 +425,18 @@ def main(optim_params):
         # --------------- TRAINING SECTION BEGIN -----------------
         model.train()
         for i in range(1, train_accumulation_steps+1):
-            # forward pass
             with ctx:
                 _, loss = model(x, y, return_logits=False)
                 train_loss = loss.detach()
                 if torch.isnan(train_loss) or torch.isinf(train_loss) or train_loss > 100:
-                    raise optuna.TrialPruned("Diverged")
+                    raise optuna.TrialPruned("Diverged")   # ← PROBLEM: only fires on some ranks
                 train_loss_history[step] += train_loss.item() / train_accumulation_steps
-            # advance the dataset for the next batch
             x, y = train_loader.next_batch()
-            # backward pass
             if i < train_accumulation_steps:
-                with model.no_sync(): # there's no need to sync gradients every accumulation step
+                with model.no_sync():
                     loss.backward()
             else:
-                loss.backward() # just sync on the last step
+                loss.backward()
         for p in model.parameters():
             p.grad /= train_accumulation_steps
         # step the optimizers and schedulers
@@ -463,67 +460,58 @@ def main(optim_params):
     return train_loss_history[:args.num_iterations]
 
 
-def objective(trial):
-    # 1. Get the local device for NCCL synchronization
-    local_rank = int(os.environ['LOCAL_RANK'])
-    device = torch.device(f'cuda:{local_rank}')
-
-    # 2. Wrap the trial. Rank 0 passes a real trial object, others pass `None`.
-    dist_trial = TorchDistributedTrial(trial)
-
-    # 3. Use `dist_trial` exactly like you would use a normal trial.
-    optim_params = {
-        "lr": dist_trial.suggest_float("lr", 1e-6, 1e-4, log=True),
-        "beta_LR": dist_trial.suggest_float("beta_LR", 0.85, 0.999), # Added missing boundaries
-        "momentum": dist_trial.suggest_float("momentum", 0.4, 1.),
-        "eps": dist_trial.suggest_float("eps", 1e-12, 1., log=True),
-        "use_bias_correction": dist_trial.suggest_categorical("use_bias_correction", [True, False])
-    }
-
-    try:
-        # Train the model
-        loss = main(optim_params)
-        min_loss = float(np.nanmin(loss))
-
-        if np.isnan(min_loss) or np.isinf(min_loss):
-            raise optuna.TrialPruned("Model diverged: NaN or Inf loss detected.")
-
-        return min_loss
-
-    except Exception as e:
-        raise optuna.TrialPruned(f"Trial failed due to exception: {e}")
-
-# -----------------------------------------------------------------------------
-# DDP & Optuna Orchestration
-
 if __name__ == "__main__":
-    # Initialize process group ONCE for the entire study execution
     dist.init_process_group(backend='nccl')
     rank = int(os.environ['RANK'])
 
     study_name = "gpt-train-loss-steepestscion-study"
-    storage = JournalStorage(JournalFileStorage(f"{study_name}.log"))
     n_trials = 150
 
-    # Rank 0 handles the database and orchestrates the study
+    storage = optuna.storages.RDBStorage(
+    url="sqlite:///gpt-train-loss-steepestscion-study",
+    engine_kwargs={"connect_args": {"timeout": 30}}
+    )
+
+    # Only rank 0 owns the real study object
     if rank == 0:
         study = optuna.create_study(
-            direction="minimize", 
-            study_name=study_name, 
-            storage=storage, 
+            direction="minimize",
+            study_name=study_name,
+            storage=storage,
             load_if_exists=True
         )
+    else:
+        study = None
+
+    def objective(trial):
+        # This wrapper syncs suggest_* calls via broadcast.
+        # Non-rank-0 processes pass trial=None and just receive.
+        dist_trial = TorchDistributedTrial(trial)
+
+        optim_params = {
+            "lr":                 dist_trial.suggest_float("lr", 1e-6, 1e-4, log=True),
+            "beta_LR":            dist_trial.suggest_float("beta_LR", 0.85, 0.999),
+            "momentum":           dist_trial.suggest_float("momentum", 0.4, 1.0),
+            "eps":                dist_trial.suggest_float("eps", 1e-12, 1.0, log=True),
+            "use_bias_correction": dist_trial.suggest_categorical("use_bias_correction", [True, False]),
+        }
+
+        try:
+            loss = main(optim_params)  # ALL ranks enter this together
+            return float(np.nanmin(loss))
+        except optuna.TrialPruned:
+            raise
+
+    # Rank 0 drives Optuna; all other ranks mirror it trial-by-trial
+    if rank == 0:
         study.optimize(objective, n_trials=n_trials)
-        
-    # Worker ranks pass `None` to the objective in a loop
     else:
         for _ in range(n_trials):
             try:
-                objective(None)
+                objective(None)  # TorchDistributedTrial(None) = receiver mode
             except optuna.TrialPruned:
-                # If Rank 0 prunes, TorchDistributedTrial propagates the exception via NCCL
-                # We catch it gracefully here to move to the next trial
+                pass
+            except Exception:
                 pass
 
-    # Clean up DDP once the whole study finishes
     dist.destroy_process_group()
