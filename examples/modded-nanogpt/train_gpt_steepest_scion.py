@@ -478,3 +478,5 @@ if __name__ == "__main__":
     # calculate the steps of gradient accumulation required to attain the desired global batch size.
     assert args.batch_size % (B * ddp_world_size) == 0
     train_accumulation_steps = args.batch_size // (B * ddp_world_size)
+
+    train_loss = main(args, optim_args)
