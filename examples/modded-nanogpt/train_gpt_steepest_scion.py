@@ -456,7 +456,7 @@ def main(args, optim_args):
             approx_time = training_time_ms + 1000 * (time.time() - t0)
             print(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} sign dual norm: {accumulated_dual_norms['Sign']} spectral dual norm: {accumulated_dual_norms['Spectral']}")
             with open(logfile, "a") as f:
-                f.write(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f}")
+                f.write(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} sign dual norm: {accumulated_dual_norms['Sign']} spectral dual norm: {accumulated_dual_norms['Spectral']} \n")
 
     if master_process:
         print(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
