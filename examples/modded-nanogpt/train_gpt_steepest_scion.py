@@ -474,14 +474,14 @@ if __name__ == "__main__":
     momenta = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.96, 0.99 ]
     betas = [0.85, 0.9, 0.99, 0.999]
 
-    for lr in lrs:
+    for eps in epsilons:
 
-        print(f"{'='* 50} lr = {lr} {'='*50} ")
+        print(f"{'='* 50} eps = {eps} {'='*50} ")
         optim_args = {
-            "lr":lr, 
+            "lr":5*1e-5, 
             "momentum": 0.9,
             "beta_LR": 0.999, 
-            "eps": 1.
+            "eps": eps
         }
 
     train_loss = main(args, optim_args)
