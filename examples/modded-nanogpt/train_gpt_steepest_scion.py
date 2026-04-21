@@ -246,10 +246,10 @@ class Hyperparameters:
     batch_size : int = 8*64 # batch size, in sequences, across all devices
     device_batch_size : int = 64 # batch size, in sequences, per device
     sequence_length : int = 1024 # sequence length, in tokens
-    num_iterations : int = 1000 # number of iterations to run
+    num_iterations : int = 2000 # number of iterations to run
     learning_rate : float = 1e-5#0.00036
-    warmup_iters : int = 100
-    warmdown_iters : int = 1450 # number of iterations of linear warmup/warmdown for triangular or trapezoidal schedule
+    warmup_iters : int = 150
+    warmdown_iters : int = 500 # number of iterations of linear warmup/warmdown for triangular or trapezoidal schedule
     weight_decay : float = 0
     # evaluation and logging hyperparams
     val_loss_every : int = 125 # every how many steps to evaluate val loss? 0 for only at the end
@@ -342,15 +342,16 @@ def main(args, optim_args):
     # begin logging
     if master_process:
         run_id = str(uuid.uuid4())
-        logdir = 'logs/%s/' % run_id
+        study_name = f"logs_steepest_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_{optim_args['beta_LR']}_eps_{optim_args['eps']}"
+        logdir = f'logs/{study_name}'
         os.makedirs(logdir, exist_ok=True)
-        logfile = f"logs/logs_steepest_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_{optim_args['beta_LR']}_eps_{optim_args['eps']}.txt"
+        logfile = f"logs/{study_name}/{study_name}.txt"
         # create the log file
         with open(logfile, "w") as f:
             # begin the log by printing this file (the Python code)
-            f.write('='*100 + '\n')
-            f.write(code)
-            f.write('='*100 + '\n')
+            # f.write('='*100 + '\n')
+            # f.write(code)
+            # f.write('='*100 + '\n')
             # log information about the hardware/software environment this is running on
             # and print the full `nvidia-smi` to file
             f.write(f"Running pytorch {torch.version.__version__} compiled for CUDA {torch.version.cuda}\nnvidia-smi:\n")
@@ -473,13 +474,14 @@ if __name__ == "__main__":
     momenta = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.96, 0.99 ]
     betas = [0.85, 0.9, 0.99, 0.999]
 
-    for eps in epsilons:
+    for lr in lrs:
 
+        print(f"{'='* 50} lr = {lr} {'='*50} ")
         optim_args = {
-            "lr":5*1e-5, 
+            "lr":lr, 
             "momentum": 0.9,
             "beta_LR": 0.999, 
-            "eps": eps
+            "eps": 1.
         }
 
     train_loss = main(args, optim_args)
