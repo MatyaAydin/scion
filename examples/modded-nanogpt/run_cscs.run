@@ -14,7 +14,6 @@ cd /iopsstor/scratch/cscs/maydin/scion/examples/modded-nanogpt
 
 pip install -r ./requirements.txt
 pip install -r ./data/requirements.txt
-pip install --no-cache-dir --upgrade "optuna==3.6.0"
-pip install optuna-integration[pytorch_distributed]
 
-torchrun --standalone --nproc_per_node=4 ./train_gpt_optuna.py
+
+torchrun --standalone --nproc_per_node=4 ./train_gpt_steepest_scion.py
