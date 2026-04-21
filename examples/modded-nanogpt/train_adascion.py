@@ -246,9 +246,9 @@ class Hyperparameters:
     batch_size : int = 8*64
     device_batch_size : int = 64
     sequence_length : int = 1024
-    num_iterations : int = 2000
-    warmup_iters : int = 150
-    warmdown_iters : int = 500
+    num_iterations : int = 5100
+    warmup_iters : int = 750
+    warmdown_iters : int = 1250
     weight_decay : float = 0
     # evaluation and logging hyperparams
     val_loss_every : int = 125
@@ -470,13 +470,13 @@ if __name__ == "__main__":
 
     # Default optim args — only the swept param changes each iteration
     optim_args = {
-        "lr": 5e-5,
+        "lr": 1e-6,
         "momentum": 0.9,
         "beta_eucl": 0.999,
         "beta_spectral":0.999,
         "use_trace_normalization": True,
         "power_frequency": 500,
-        "eps":1e-6
+        "eps":1e-2
     }
 
     train_loss = main(args, optim_args)
