@@ -240,28 +240,33 @@ class DistributedDataLoader:
 @dataclass
 class Hyperparameters:
     # data hyperparams
-    input_bin : str = 'data/fineweb10B/fineweb_train_*.bin' # input .bin to train on
-    input_val_bin : str = 'data/fineweb10B/fineweb_val_*.bin' # input .bin to eval validation loss on
+    input_bin : str = 'data/fineweb10B/fineweb_train_*.bin'
+    input_val_bin : str = 'data/fineweb10B/fineweb_val_*.bin'
     # optimization hyperparams
-    batch_size : int = 8*64 # batch size, in sequences, across all devices
-    device_batch_size : int = 64 # batch size, in sequences, per device
-    sequence_length : int = 1024 # sequence length, in tokens
-    num_iterations : int = 2000 # number of iterations to run
-    learning_rate : float = 1e-5#0.00036
+    batch_size : int = 8*64
+    device_batch_size : int = 64
+    sequence_length : int = 1024
+    num_iterations : int = 2000
     warmup_iters : int = 150
-    warmdown_iters : int = 500 # number of iterations of linear warmup/warmdown for triangular or trapezoidal schedule
+    warmdown_iters : int = 500
     weight_decay : float = 0
     # evaluation and logging hyperparams
-    val_loss_every : int = 125 # every how many steps to evaluate val loss? 0 for only at the end
-    val_tokens : int = 10485760 # how many tokens of validation data? it's important to keep this fixed for consistent comparisons
-    save_every : int = 0 # every how many steps to save the checkpoint? 0 for only at the end
+    val_loss_every : int = 125
+    val_tokens : int = 10485760
+    save_every : int = 0
+    # model hyperparams
     n_layer : int = 12
-    n_head : int = 6 # set as n_embd/128 so head_dim is 128
+    n_head : int = 6
     n_embd : int = 768
+    # optimizer hyperparams (ablation targets — set via CLI)
     unconstrained : bool = False
-    momentum: float = 0.9#0.1
+    momentum : float = 0.9
     scale : float = 50
     last_scale : float = 300
+    # optim_args — these are the ablation knobs
+    lr : float = 5e-5
+    beta_LR : float = 0.999
+    eps : float = 1.0
 
 
 def main(args, optim_args):
@@ -341,11 +346,10 @@ def main(args, optim_args):
 
     # begin logging
     if master_process:
-        run_id = str(uuid.uuid4())
         study_name = f"logs_steepest_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_{optim_args['beta_LR']}_eps_{optim_args['eps']}"
-        logdir = f'logs/{study_name}'
-        os.makedirs(logdir, exist_ok=True)
-        logfile = f"logs/{study_name}/{study_name}.txt"
+        # logdir = f'logs/{study_name}'
+        # os.makedirs(logdir, exist_ok=True)
+        logfile = f"logs/{study_name}.txt"
         # create the log file
         with open(logfile, "w") as f:
             # begin the log by printing this file (the Python code)
@@ -408,8 +412,8 @@ def main(args, optim_args):
             torch.cuda.synchronize()
             training_time_ms += 1000 * (time.time() - t0)
             # save the state of the training process
-            log = dict(step=step, code=code, model=raw_model.state_dict(), optimizers=[opt.state_dict() for opt in optimizers])
-            torch.save(log, 'logs/%s/state_step%06d.pt' % (run_id, step))
+            # log = dict(step=step, code=code, model=raw_model.state_dict(), optimizers=[opt.state_dict() for opt in optimizers])
+            # torch.save(log, 'logs/%s/state_step%06d.pt' % (run_id, step))
             # start the clock again
             torch.cuda.synchronize()
             t0 = time.time()
@@ -469,21 +473,12 @@ if __name__ == "__main__":
     dist.init_process_group(backend='nccl')
     args = parse(Hyperparameters)
 
-    lrs = np.logspace(-6, -4, 10)
-    epsilons = np.logspace(-6, 0, 7)
-    momenta = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.96, 0.99 ]
-    betas = [0.85, 0.9, 0.99, 0.999]
-
-    for momentum in momenta:
-
-        print(f"{'='* 50} momentum = {momentum} {'='*50} ")
-        optim_args = {
-            "lr":5*1e-5, 
-            "momentum": momentum,
-            "beta_LR": 0.999, 
-            "eps": 1.
-        }
+    optim_args = {
+        "lr": args.lr,
+        "momentum": args.momentum,
+        "beta_LR": args.beta_LR,
+        "eps": args.eps,
+    }
 
     train_loss = main(args, optim_args)
-
     dist.destroy_process_group()
