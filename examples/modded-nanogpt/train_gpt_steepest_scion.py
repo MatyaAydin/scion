@@ -258,15 +258,13 @@ class Hyperparameters:
     n_layer : int = 12
     n_head : int = 6
     n_embd : int = 768
-    # optimizer hyperparams (ablation targets — set via CLI)
+    # optimizer hyperparams
     unconstrained : bool = False
     momentum : float = 0.9
     scale : float = 50
     last_scale : float = 300
-    # optim_args — these are the ablation knobs
-    lr : float = 5e-5
-    beta_LR : float = 0.999
-    eps : float = 1.0
+    # which hyperparameter to sweep (set via CLI: --sweep lr|momentum|beta_LR|eps)
+    sweep : str = 'momentum'
 
 
 def main(args, optim_args):
@@ -473,12 +471,34 @@ if __name__ == "__main__":
     dist.init_process_group(backend='nccl')
     args = parse(Hyperparameters)
 
-    optim_args = {
-        "lr": args.lr,
-        "momentum": args.momentum,
-        "beta_LR": args.beta_LR,
-        "eps": args.eps,
+    # Default optim args — only the swept param changes each iteration
+    DEFAULTS = {
+        "lr": 5e-5,
+        "momentum": 0.9,
+        "beta_LR": 0.999,
+        "eps": 1.0,
     }
 
-    train_loss = main(args, optim_args)
+    sweep_values = {
+        "lr":       list(np.logspace(-6, -4, 10)),
+        "momentum": [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.96, 0.99],
+        "beta_LR":  [0.85, 0.9, 0.99, 0.999],
+        "eps":      list(np.logspace(-6, 0, 7)),
+    }
+
+    assert args.sweep in sweep_values, \
+        f"--sweep must be one of {list(sweep_values.keys())}, got '{args.sweep}'"
+
+    ddp_rank = int(os.environ['RANK'])
+    master_process = (ddp_rank == 0)
+
+    for value in sweep_values[args.sweep]:
+        optim_args = {**DEFAULTS, args.sweep: value}
+        if master_process:
+            print(f"\n{'='*60}")
+            print(f"Sweeping {args.sweep} = {value}")
+            print(f"optim_args: {optim_args}")
+            print(f"{'='*60}\n")
+        train_loss = main(args, optim_args)
+
     dist.destroy_process_group()
