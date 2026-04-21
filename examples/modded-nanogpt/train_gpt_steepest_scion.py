@@ -474,13 +474,13 @@ if __name__ == "__main__":
     momenta = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.96, 0.99 ]
     betas = [0.85, 0.9, 0.99, 0.999]
 
-    for beta in betas:
+    for momentum in momenta:
 
-        print(f"{'='* 50} beta = {beta} {'='*50} ")
+        print(f"{'='* 50} momentum = {momentum} {'='*50} ")
         optim_args = {
             "lr":5*1e-5, 
-            "momentum": 0.9,
-            "beta_LR": beta, 
+            "momentum": momentum,
+            "beta_LR": 0.999, 
             "eps": 1.
         }
 
