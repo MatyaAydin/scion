@@ -246,9 +246,9 @@ class Hyperparameters:
     batch_size : int = 8*64 # batch size, in sequences, across all devices
     device_batch_size : int = 64 # batch size, in sequences, per device
     sequence_length : int = 1024 # sequence length, in tokens
-    num_iterations : int = 5100 # number of iterations to run
+    num_iterations : int = 1000 # number of iterations to run
     learning_rate : float = 1e-5#0.00036
-    warmup_iters : int = 500
+    warmup_iters : int = 100
     warmdown_iters : int = 1450 # number of iterations of linear warmup/warmdown for triangular or trapezoidal schedule
     weight_decay : float = 0
     # evaluation and logging hyperparams
@@ -467,12 +467,17 @@ if __name__ == "__main__":
     assert torch.cuda.is_available()
     dist.init_process_group(backend='nccl')
     args = parse(Hyperparameters)
-    optim_args = {
-        "lr":5*1e-6, 
-        "momentum": 0.9,
-        "beta_LR": 0.999, 
-        "eps": 1.
-    }
+
+    lrs = np.logspace(-6, -4, 10)
+
+    for lr in lrs:
+
+        optim_args = {
+            "lr":lr, 
+            "momentum": 0.9,
+            "beta_LR": 0.999, 
+            "eps": 1.
+        }
 
     train_loss = main(args, optim_args)
 
