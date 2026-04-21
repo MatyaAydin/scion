@@ -344,7 +344,7 @@ def main(args, optim_args):
 
     # begin logging
     if master_process:
-        study_name = f"logs_ada_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_{optim_args['beta_LR']}_eps_{optim_args['eps']}"
+        study_name = f"logs_ada_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_eucl_{optim_args['beta_eucl']}_beta_spectral_{optim_args['beta_spectral']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}"
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
         logfile = f"logs_adascion/{study_name}.txt"
