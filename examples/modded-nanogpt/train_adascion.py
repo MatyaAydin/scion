@@ -475,7 +475,8 @@ if __name__ == "__main__":
         "beta_eucl": 0.999,
         "beta_spectral":0.999,
         "use_trace_normalization": True,
-        "power_frequency": 500
+        "power_frequency": 500,
+        "eps":1e-6
     }
 
     train_loss = main(args, optim_args)
