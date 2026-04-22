@@ -264,7 +264,7 @@ class AdaScion(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-                beta_eucl=0.99, beta_spectral=0.999, order=8, eps=1e-8, power_frequency=50, normalize_update=False, use_trace_normalization=False):
+                beta_eucl=0.99, beta_spectral=0.999, order=8, eps=1e-8, power_frequency=50, use_trace_normalization=False):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -272,7 +272,7 @@ class AdaScion(torch.optim.Optimizer):
         if norm_kwargs is None:
             norm_kwargs = {}
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
-        beta_eucl=beta_eucl, beta_spectral=beta_spectral, order=order, eps=eps, power_frequency=power_frequency, normalize_update=normalize_update, use_trace_normalization=use_trace_normalization)
+        beta_eucl=beta_eucl, beta_spectral=beta_spectral, order=order, eps=eps, power_frequency=power_frequency, use_trace_normalization=use_trace_normalization)
         super().__init__(params, defaults)
         self.effective_lrs = {}
 
@@ -288,7 +288,6 @@ class AdaScion(torch.optim.Optimizer):
             beta_spectral = group["beta_spectral"]
             eps = group["eps"]
             power_frequency = group["power_frequency"]
-            normalize_update = group["normalize_update"]
             use_trace_normalization = group["use_trace_normalization"]
 
             norm_type = norm_backend.norm_type
@@ -321,6 +320,7 @@ class AdaScion(torch.optim.Optimizer):
                     eucl_buffer = state["euclidean_buffer"]
                     eucl_buffer.mul_(beta_eucl).add_(g_2d * g_2d, alpha=1 - beta_eucl)
 
+                    # TODO: is it needed ?
                     bias_correction_M = 1. - momentum**iter_number
                     bias_correction_P = 1. - beta_eucl**iter_number
 
@@ -329,11 +329,9 @@ class AdaScion(torch.optim.Optimizer):
 
                     lmo_ = weighted_norm_D_lmo(norm_backend, m_hat, p_hat, eps)
                     dual_norm = (lmo_ * m_hat).sum()
-                    if normalize_update:
-                        dual_norm /= min(g_2d.shape[0], g_2d.shape[1])
                     update = scale * lmo_ * dual_norm
                     effective_lr = scale * dual_norm * lr
-                    self.effective_lrs[group_idx] = effective_lr
+                    self.effective_lrs[group['norm']] = effective_lr
 
                 else: # spectral
 
@@ -361,11 +359,9 @@ class AdaScion(torch.optim.Optimizer):
 
                     lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
                     dual_norm = (lmo_ * buf).sum()
-                    if normalize_update:
-                        dual_norm /= min(g_2d.shape[0], g_2d.shape[1])
                     update = scale * lmo_ * dual_norm
                     effective_lr = scale * dual_norm * lr
-                    self.effective_lrs[group_idx] = effective_lr
+                    self.effective_lrs[group['norm']] = effective_lr
 
 
 

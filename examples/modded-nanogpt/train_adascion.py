@@ -350,13 +350,6 @@ def main(args, optim_args):
         logfile = f"logs_adascion/{study_name}.txt"
         # create the log file
         with open(logfile, "w") as f:
-            # begin the log by printing this file (the Python code)
-            # f.write('='*100 + '\n')
-            # f.write(code)
-            # f.write('='*100 + '\n')
-            # log information about the hardware/software environment this is running on
-            # and print the full `nvidia-smi` to file
-            f.write(f"Running pytorch {torch.version.__version__} compiled for CUDA {torch.version.cuda}\nnvidia-smi:\n")
             import subprocess
             result = subprocess.run(['nvidia-smi'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             f.write(f'{result.stdout}\n')
@@ -446,6 +439,8 @@ def main(args, optim_args):
         for opt, sched in zip(optimizers, schedulers):
             opt.step()
             sched.step()
+            spec_effective_lr = opt.effective_lrs["Spectral"]
+            eucl_effective_lr = opt.effective_lrs["Sign"]
         # null the gradients
         model.zero_grad(set_to_none=True)
         # --------------- TRAINING SECTION END -------------------
@@ -454,9 +449,9 @@ def main(args, optim_args):
         #dist.all_reduce(train_loss, op=dist.ReduceOp.AVG) # all-reducing the training loss would be more correct in terms of logging, but slower
         if master_process:
             approx_time = training_time_ms + 1000 * (time.time() - t0)
-            print(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f}")
+            print(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} eucl elr: {eucl_effective_lr} spec elr: {spec_effective_lr}")
             with open(logfile, "a") as f:
-                f.write(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f}\n")
+                f.write(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} eucl elr: {eucl_effective_lr} spec elr: {spec_effective_lr} \n")
 
     if master_process:
         print(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
@@ -476,9 +471,9 @@ if __name__ == "__main__":
         "beta_eucl": beta,
         "beta_spectral": beta,
         "use_trace_normalization": True,
-        "power_frequency": 25,
+        "power_frequency": 500,
         "eps":1e-2,
-        "order": 4
+        "order": 8
     }
 
     train_loss = main(args, optim_args)
