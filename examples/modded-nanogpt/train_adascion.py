@@ -344,7 +344,7 @@ def main(args, optim_args):
 
     # begin logging
     if master_process:
-        study_name = f"logs_ada_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_eucl_{optim_args['beta_eucl']}_beta_spectral_{optim_args['beta_spectral']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}"
+        study_name = f"logs_ada_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_{optim_args['beta_eucl']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}_tracenorm_{optim_args['use_trace_normalization']}_normupdate_{optim_args['normalize_update']}"
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
         logfile = f"logs_adascion/{study_name}.txt"
@@ -475,6 +475,7 @@ if __name__ == "__main__":
         "beta_eucl": 0.999,
         "beta_spectral":0.999,
         "use_trace_normalization": True,
+        "normalize_update": True,
         "power_frequency": 500,
         "eps":1e-2
     }
