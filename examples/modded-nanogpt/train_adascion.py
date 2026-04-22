@@ -344,7 +344,7 @@ def main(args, optim_args):
 
     # begin logging
     if master_process:
-        study_name = f"logs_ada_scion_lr_{optim_args['lr']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}_tracenorm_{optim_args['use_trace_normalization']}_warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}"
+        study_name = f"logs_ada_scion_lr_{optim_args['lr']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}_tracenorm_{optim_args['use_trace_normalization']}_order_{optim_args['order']}_warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}"
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
         logfile = f"logs_adascion/{study_name}.txt"
@@ -476,7 +476,8 @@ if __name__ == "__main__":
         "beta_spectral":0.999,
         "use_trace_normalization": True,
         "power_frequency": 50,
-        "eps":1e-2
+        "eps":1e-2,
+        "order": 4
     }
 
     train_loss = main(args, optim_args)
