@@ -311,7 +311,7 @@ def main(args, optim_args):
 
     if master_process:
         os.makedirs("logs_adascion", exist_ok=True)
-        study_name = f"logs_ada_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_{optim_args['beta_eucl']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}_4"
+        study_name = f"logs_ada_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_{optim_args['beta_eucl']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}_{optim_args['order']}"
         logfile = f"logs_adascion/{study_name}.txt"
         with open(logfile, "w") as f:
             f.write(f"Running pytorch {torch.version.__version__} compiled for CUDA {torch.version.cuda}\nnvidia-smi:\n")
@@ -434,7 +434,7 @@ if __name__ == "__main__":
             "use_trace_normalization": True,
             "power_frequency":       int(d["power_frequency"]),
             "eps":                   d["eps"],
-            "order": 4
+            "order": 8
         }
         if master_process:
             print(f"\n{'='*60}")
