@@ -94,6 +94,7 @@ class Scion(torch.optim.Optimizer):
             raise ValueError(f"Invalid momentum value: {momentum}")
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained)
         super().__init__(params, defaults)
+        self.effective_lrs = {}
 
     def step(self):
         for group in self.param_groups:
@@ -116,6 +117,7 @@ class Scion(torch.optim.Optimizer):
                     g = buf
 
                 update = scale * norm_backend.lmo(g)
+                self.effective_lrs[group['norm']] = scale * lr
                 if unconstrained:
                     p.data.add_(update, alpha=-lr)  # Unconstrained Scion
                 else:
@@ -544,6 +546,8 @@ for step in range(args.num_iterations + 1):
     for opt, sched in zip(optimizers, schedulers):
         opt.step()
         sched.step()
+        spec_effective_lr = opt.effective_lrs["Spectral"]
+        eucl_effective_lr = opt.effective_lrs["Sign"]
     # null the gradients
     model.zero_grad(set_to_none=True)
     # --------------- TRAINING SECTION END -------------------
@@ -552,9 +556,9 @@ for step in range(args.num_iterations + 1):
     #dist.all_reduce(train_loss, op=dist.ReduceOp.AVG) # all-reducing the training loss would be more correct in terms of logging, but slower
     if master_process:
         approx_time = training_time_ms + 1000 * (time.time() - t0)
-        print(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} train_time:{approx_time:.0f}ms step_avg:{approx_time/timed_steps:.2f}ms")
+        print(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} eucl elr: {eucl_effective_lr} spec elr: {spec_effective_lr}")
         with open(logfile, "a") as f:
-            f.write(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} train_time:{approx_time:.0f}ms step_avg:{approx_time/timed_steps:.2f}ms\n")
+            f.write(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} eucl elr: {eucl_effective_lr} spec elr: {spec_effective_lr}\n")
 
 if master_process:
     print(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
