@@ -247,7 +247,7 @@ class Hyperparameters:
     device_batch_size : int = 64
     sequence_length : int = 1024
     num_iterations : int = 5100
-    warmup_iters : int = 50
+    warmup_iters : int = 250
     warmdown_iters : int = 500
     weight_decay : float = 0
     # evaluation and logging hyperparams
@@ -475,7 +475,7 @@ if __name__ == "__main__":
         "beta_eucl": 0.999,
         "beta_spectral":0.999,
         "use_trace_normalization": True,
-        "power_frequency": 500,
+        "power_frequency": 50,
         "eps":1e-2
     }
 
