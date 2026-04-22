@@ -471,8 +471,8 @@ if __name__ == "__main__":
         "beta_eucl": beta,
         "beta_spectral": beta,
         "use_trace_normalization": True,
-        "power_frequency": 500,
-        "eps":1e-2,
+        "power_frequency": 50,
+        "eps":1e-4,
         "order": 8
     }
 
