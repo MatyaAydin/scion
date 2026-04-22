@@ -478,7 +478,7 @@ if __name__ == "__main__":
         "use_trace_normalization": True,
         "power_frequency": 25,
         "eps":1e-2,
-        "order": 8
+        "order": 4
     }
 
     train_loss = main(args, optim_args)
