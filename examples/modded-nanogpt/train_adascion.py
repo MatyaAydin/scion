@@ -467,16 +467,17 @@ if __name__ == "__main__":
     assert torch.cuda.is_available()
     dist.init_process_group(backend='nccl')
     args = parse(Hyperparameters)
+    beta = 0.99
 
     # Default optim args — only the swept param changes each iteration
     optim_args = {
         "lr": 5*1e-5,
         "momentum": 0.9,
-        "beta_eucl": 0.999,
-        "beta_spectral":0.999,
+        "beta_eucl": beta,
+        "beta_spectral": beta,
         "use_trace_normalization": True,
         "power_frequency": 50,
-        "eps":1e-2,
+        "eps":1e-4,
         "order": 4
     }
 
