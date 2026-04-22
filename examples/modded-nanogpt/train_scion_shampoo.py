@@ -262,7 +262,7 @@ class Hyperparameters:
     unconstrained : bool = False
     momentum : float = 0.9
     scale : float = 50
-    last_scale : float = 300
+    last_scale : float = 3000
     # which hyperparameter to sweep (set via CLI: --sweep lr|momentum|beta_LR|eps)
     sweep : str = 'momentum'
 

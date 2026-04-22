@@ -291,12 +291,12 @@ class ScionShampoo(torch.optim.Optimizer):
                 state = self.state[p]
 
                 if is_sign:
-                    # Default Scion
+                    # Default Scion: no precond and no need to cast to 2d
                     if momentum != 1:
                         if 'momentum_buffer' not in state.keys():
                             state['momentum_buffer'] = torch.zeros_like(g)
                         buf = state['momentum_buffer']
-                        buf.mul_(momentum).add_(g_2d, alpha=1. - momentum)
+                        buf.mul_(momentum).add_(g, alpha=1. - momentum)
                         g = buf
                     update = scale * norm_backend.lmo(g)
                     effective_lr = scale * lr
