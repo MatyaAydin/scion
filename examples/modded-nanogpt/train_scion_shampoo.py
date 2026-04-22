@@ -247,7 +247,7 @@ class Hyperparameters:
     device_batch_size : int = 64
     sequence_length : int = 1024
     num_iterations : int = 5100
-    warmup_iters : int = 250
+    warmup_iters : int = 50
     warmdown_iters : int = 500
     weight_decay : float = 0
     # evaluation and logging hyperparams
@@ -321,7 +321,7 @@ def main(args, optim_args):
         'params': raw_model.lm_head.parameters(), 
         'norm': 'Sign', 
         'norm_kwargs': {}, 
-        'scale': args.last_scale,
+        'scale': args.last_scale * 0.00036/optim_args['lr'], # default scion: use original lr
     }
     ]
     optimizer1 = ScionShampoo(optim_groups, unconstrained=args.unconstrained, **optim_args)
@@ -465,7 +465,7 @@ if __name__ == "__main__":
 
     # Default optim args — only the swept param changes each iteration
     optim_args = {
-        "lr": 5*1e-5,
+        "lr": 5*1e-4,
         "momentum": 0.9,
         "beta": 0.95,
         "use_trace_normalization": True,
