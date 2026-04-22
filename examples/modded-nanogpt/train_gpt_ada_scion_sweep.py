@@ -225,12 +225,12 @@ class Hyperparameters:
     batch_size : int = 8*64
     device_batch_size : int = 64
     sequence_length : int = 1024
-    num_iterations : int = 5100
-    warmup_iters : int = 750
-    warmdown_iters : int = 1250
+    num_iterations : int = 1500
+    warmup_iters : int = 75
+    warmdown_iters : int = 250
     weight_decay : float = 0
     # evaluation and logging hyperparams
-    val_loss_every : int = 125
+    val_loss_every : int = 75
     val_tokens : int = 10485760
     save_every : int = 0
     # model hyperparams
@@ -311,7 +311,7 @@ def main(args, optim_args):
 
     if master_process:
         os.makedirs("logs_adascion", exist_ok=True)
-        study_name = f"logs_ada_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_eucl_{optim_args['beta_eucl']}_beta_spectral_{optim_args['beta_spectral']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}"
+        study_name = f"logs_ada_scion_lr_{optim_args['lr']}_momentum_{optim_args['momentum']}_beta_{optim_args['beta_eucl']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}_4"
         logfile = f"logs_adascion/{study_name}.txt"
         with open(logfile, "w") as f:
             f.write(f"Running pytorch {torch.version.__version__} compiled for CUDA {torch.version.cuda}\nnvidia-smi:\n")
@@ -408,15 +408,15 @@ if __name__ == "__main__":
         "momentum":        0.9,
         "beta":            0.999,  # applied to both beta_eucl and beta_spectral
         "eps":             1e-2,
-        "power_frequency": 500,
+        "power_frequency": 100,
     }
 
     sweep_values = {
         "lr":              list(np.logspace(-6, -4, 10)),
-        "momentum":        [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.96, 0.99],
+        "momentum":        [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95],
         "beta":            [0.85, 0.9, 0.99, 0.999],
-        "eps":             list(np.logspace(-6, 0, 7)),
-        "power_frequency": [100, 250, 500, 1000, 2000],
+        "eps":             list(np.logspace(-4, 0, 5)),
+        "power_frequency": [25, 50, 100, 250, 500],
     }
 
     assert args.sweep in sweep_values, \
@@ -434,6 +434,7 @@ if __name__ == "__main__":
             "use_trace_normalization": True,
             "power_frequency":       int(d["power_frequency"]),
             "eps":                   d["eps"],
+            "order": 4
         }
         if master_process:
             print(f"\n{'='*60}")
