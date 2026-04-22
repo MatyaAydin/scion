@@ -19,7 +19,7 @@ SLURM_ENV="vllm2026-container"
 WORK_DIR="/iopsstor/scratch/cscs/maydin/scion/examples/modded-nanogpt"
 TRAIN_SCRIPT="./train_gpt_ada_scion_sweep.py"
 NPROC=4
-TIME_LIMIT="2:00:00"
+TIME_LIMIT="8:00:00"
 
 submit_sweep() {
     local sweep="$1"
