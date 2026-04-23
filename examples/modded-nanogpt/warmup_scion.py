@@ -343,9 +343,19 @@ class WarmupScion(torch.optim.Optimizer):
 
                         # Direction: preconditioned geometry (better curvature adaptation)
                         lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
-                        # Step size: original geometry dual norm (continuous with warmup)
+                        
+                        # Step size reference: original geometry dual norm
                         lmo_for_norm = norm_backend.lmo(buf)
-                        dual_norm = (lmo_for_norm * buf).sum()  # = ‖buf‖_nuclear, same as warmup
+                        dual_norm = (lmo_for_norm * buf).sum()  
+
+                        # ---------------------------------------------------------
+                        # FIX: Gradient Grafting
+                        # Rescale lmo_ to match lmo_for_norm's magnitude.
+                        # This preserves the Shampoo curvature while enforcing Scion's 
+                        # original scale, preventing the explosion at step 1001.
+                        # ---------------------------------------------------------
+                        graft_scale = lmo_for_norm.norm() / (lmo_.norm() + eps)
+                        lmo_.mul_(graft_scale)
 
                         update = scale * lmo_ * dual_norm
                         effective_lr = scale * dual_norm * lr
