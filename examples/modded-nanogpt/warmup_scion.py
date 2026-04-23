@@ -3,7 +3,7 @@ import torch
 
 
 #######################################################
-# ScionShampoo
+# ScionShampoo with warmup
 #######################################################
 
 
@@ -333,6 +333,12 @@ class WarmupScion(torch.optim.Optimizer):
                     R.mul_(beta).add_(g_2d.T.matmul(g_2d), alpha=1 - beta)
 
                     if iter_number > warmup_iter:
+                        # buffer reset
+                        if iter_number == warmup_iter + 1:
+                            state['momentum_buffer'].zero_()
+                            buf = state['momentum_buffer']
+                            buf.add_(g_2d)
+
                         if iter_number % power_frequency == 1 or state["L_inv"] is None:
                             L_inv, R_inv = compute_LR_inv(L, R, order=order, eps_stab=eps)
                             state["L_inv"] = L_inv
@@ -341,22 +347,8 @@ class WarmupScion(torch.optim.Optimizer):
                         L_inv = state["L_inv"]
                         R_inv = state["R_inv"]
 
-                        # Direction: preconditioned geometry (better curvature adaptation)
                         lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
-                        
-                        # Step size reference: original geometry dual norm
-                        lmo_for_norm = norm_backend.lmo(buf)
-                        dual_norm = (lmo_for_norm * buf).sum()  
-
-                        # ---------------------------------------------------------
-                        # FIX: Gradient Grafting
-                        # Rescale lmo_ to match lmo_for_norm's magnitude.
-                        # This preserves the Shampoo curvature while enforcing Scion's 
-                        # original scale, preventing the explosion at step 1001.
-                        # ---------------------------------------------------------
-                        graft_scale = lmo_for_norm.norm() / (lmo_.norm() + eps)
-                        lmo_.mul_(graft_scale)
-
+                        dual_norm = (lmo_ * buf).sum()
                         update = scale * lmo_ * dual_norm
                         effective_lr = scale * dual_norm * lr
                         self.effective_lrs[group['norm']] = effective_lr
