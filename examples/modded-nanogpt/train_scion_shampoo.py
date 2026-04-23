@@ -468,7 +468,7 @@ if __name__ == "__main__":
         "lr": 5*1e-4,
         "momentum": 0.9,
         "beta": 0.95,
-        "use_trace_normalization": True,
+        "use_trace_normalization": False,
         "power_frequency": 50,
         "eps":1e-8,
         "order": 4
