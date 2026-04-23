@@ -349,8 +349,10 @@ class WarmupScion(torch.optim.Optimizer):
                         self.effective_lrs[group['norm']] = effective_lr
 
                     else:
-                        update = scale * norm_backend.lmo(buf)
-                        effective_lr = scale * lr
+                        lmo_ = norm_backend.lmo(buf)
+                        dual_norm = (lmo_ * buf).sum()
+                        update = scale * dual_norm * lmo_
+                        effective_lr = scale * lr * dual_norm
                         self.effective_lrs[group['norm']] = effective_lr
 
 
