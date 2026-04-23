@@ -333,7 +333,6 @@ class WarmupScion(torch.optim.Optimizer):
                     R.mul_(beta).add_(g_2d.T.matmul(g_2d), alpha=1 - beta)
 
                     if iter_number > warmup_iter:
-
                         if iter_number % power_frequency == 1 or state["L_inv"] is None:
                             L_inv, R_inv = compute_LR_inv(L, R, order=order, eps_stab=eps)
                             state["L_inv"] = L_inv
@@ -342,8 +341,12 @@ class WarmupScion(torch.optim.Optimizer):
                         L_inv = state["L_inv"]
                         R_inv = state["R_inv"]
 
+                        # Direction: preconditioned geometry (better curvature adaptation)
                         lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
-                        dual_norm = (lmo_ * buf).sum()
+                        # Step size: original geometry dual norm (continuous with warmup)
+                        lmo_for_norm = norm_backend.lmo(buf)
+                        dual_norm = (lmo_for_norm * buf).sum()  # = ‖buf‖_nuclear, same as warmup
+
                         update = scale * lmo_ * dual_norm
                         effective_lr = scale * dual_norm * lr
                         self.effective_lrs[group['norm']] = effective_lr
