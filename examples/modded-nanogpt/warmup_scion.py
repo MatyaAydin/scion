@@ -356,12 +356,8 @@ class WarmupScion(torch.optim.Optimizer):
                         # Direction: preconditioned geometry
                         lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
                         
-                        # Step size: Original dual_norm scheduler
-                        lmo_for_norm = norm_backend.lmo(buf)
-                        dual_norm = (lmo_for_norm * buf).sum()  
+                        dual_norm = (lmo_ * buf).sum()  
 
-                        # Because L_inv and R_inv are scale-normalized, lmo_ will natively 
-                        # have roughly the same magnitude as lmo_for_norm. No grafting needed!
                         update = scale * lmo_ * dual_norm
                         effective_lr = scale * dual_norm * lr
                         self.effective_lrs[group['norm']] = effective_lr
