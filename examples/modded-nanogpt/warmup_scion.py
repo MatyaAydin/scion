@@ -333,22 +333,35 @@ class WarmupScion(torch.optim.Optimizer):
                     R.mul_(beta).add_(g_2d.T.matmul(g_2d), alpha=1 - beta)
 
                     if iter_number > warmup_iter:
-                        # buffer reset
-                        if iter_number == warmup_iter + 1:
-                            state['momentum_buffer'].zero_()
-                            buf = state['momentum_buffer']
-                            buf.add_(g_2d)
-
                         if iter_number % power_frequency == 1 or state["L_inv"] is None:
                             L_inv, R_inv = compute_LR_inv(L, R, order=order, eps_stab=eps)
+                            
+                            # ---------------------------------------------------------
+                            # FIX: Preconditioner RMS Normalization
+                            # Decouple scale from geometry by forcing the matrices to 
+                            # have an average eigenvalue (RMS) of 1.0.
+                            # ---------------------------------------------------------
+                            dim_L = L_inv.shape[0]
+                            dim_R = R_inv.shape[0]
+                            
+                            L_inv.mul_(math.sqrt(dim_L) / (torch.linalg.norm(L_inv) + eps))
+                            R_inv.mul_(math.sqrt(dim_R) / (torch.linalg.norm(R_inv) + eps))
+                            
                             state["L_inv"] = L_inv
                             state["R_inv"] = R_inv
 
                         L_inv = state["L_inv"]
                         R_inv = state["R_inv"]
 
+                        # Direction: preconditioned geometry
                         lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
-                        dual_norm = (lmo_ * buf).sum()
+                        
+                        # Step size: Original dual_norm scheduler
+                        lmo_for_norm = norm_backend.lmo(buf)
+                        dual_norm = (lmo_for_norm * buf).sum()  
+
+                        # Because L_inv and R_inv are scale-normalized, lmo_ will natively 
+                        # have roughly the same magnitude as lmo_for_norm. No grafting needed!
                         update = scale * lmo_ * dual_norm
                         effective_lr = scale * dual_norm * lr
                         self.effective_lrs[group['norm']] = effective_lr
