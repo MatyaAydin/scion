@@ -470,7 +470,7 @@ if __name__ == "__main__":
         "beta": 0.95,
         "use_trace_normalization": True,
         "power_frequency": 50,
-        "eps":1e-6,
+        "eps":1e-8,
         "order": 4
     }
 
