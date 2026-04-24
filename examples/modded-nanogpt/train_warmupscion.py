@@ -247,7 +247,7 @@ class Hyperparameters:
     device_batch_size : int = 64
     sequence_length : int = 1024
     num_iterations : int = 5100
-    warmup_iters : int = 50
+    warmup_iters : int = 0
     warmdown_iters : int = 500
     weight_decay : float = 0
     # evaluation and logging hyperparams
@@ -342,7 +342,7 @@ def main(args, optim_args):
 
     # begin logging
     if master_process:
-        study_name = f"logs_warmupscion_lr_{optim_args['lr']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}_order_{optim_args['order']}_warmdown_{args.warmdown_iters}_beta{optim_args['beta']}_warmup_{args.warmup_iters}_dual_norm{optim_args['use_dual_norm']}"
+        study_name = f"logs_warmupscion_lr_{optim_args['lr']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}_order_{optim_args['order']}_warmdown_{args.warmdown_iters}_beta{optim_args['beta']}_dual_norm{optim_args['use_dual_norm']}"
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
         logfile = f"logs_warmupscion/{study_name}.txt"
