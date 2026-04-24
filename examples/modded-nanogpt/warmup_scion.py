@@ -257,7 +257,7 @@ class WarmupScion(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-                beta=0.999, order=8, eps=1e-8, power_frequency=50, warmup_iter=1000):
+                beta=0.999, order=8, eps=1e-8, power_frequency=50, warmup_iter=1000, use_dual_norm=True):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -265,7 +265,7 @@ class WarmupScion(torch.optim.Optimizer):
         if norm_kwargs is None:
             norm_kwargs = {}
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
-        beta=beta, order=order, eps=eps, power_frequency=power_frequency,warmup_iter=warmup_iter)
+        beta=beta, order=order, eps=eps, power_frequency=power_frequency,warmup_iter=warmup_iter, use_dual_norm=use_dual_norm)
         super().__init__(params, defaults)
         self.effective_lrs = {}
 
@@ -283,6 +283,7 @@ class WarmupScion(torch.optim.Optimizer):
             eps = group["eps"]
             power_frequency = group["power_frequency"]
             warmup_iter = group['warmup_iter']
+            use_dual_norm = group['use_dual_norm'] 
 
             for p in group['params']:
                 g = p.grad
@@ -356,7 +357,10 @@ class WarmupScion(torch.optim.Optimizer):
                         # Direction: preconditioned geometry
                         lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
                         
-                        dual_norm = (lmo_ * buf).sum()  
+                        if use_dual_norm:
+                            dual_norm = (lmo_ * buf).sum()  
+                        else:
+                            dual_norm = 1.
 
                         update = scale * lmo_ * dual_norm
                         effective_lr = scale * dual_norm * lr
@@ -364,7 +368,10 @@ class WarmupScion(torch.optim.Optimizer):
 
                     else:
                         lmo_ = norm_backend.lmo(buf)
-                        dual_norm = (lmo_ * buf).sum()
+                        if use_dual_norm:
+                            dual_norm = (lmo_ * buf).sum()
+                        else:
+                            dual_norm = 1.
                         update = scale * dual_norm * lmo_
                         effective_lr = scale * lr * dual_norm
                         self.effective_lrs[group['norm']] = effective_lr
