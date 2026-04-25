@@ -462,9 +462,9 @@ if __name__ == "__main__":
     args = parse(Hyperparameters)
 
     optim_args = {
-        "lr": 0.00036,
+        "lr": 5*1e-5,
         "momentum": 0.9,
-        "beta": 0.95,
+        "beta": 0.99,
         "power_frequency": 50,
         "eps":1e-8,
         "order": 4,
