@@ -342,11 +342,11 @@ class WarmupScion(torch.optim.Optimizer):
                             # Decouple scale from geometry by forcing the matrices to 
                             # have an average eigenvalue (RMS) of 1.0.
                             # ---------------------------------------------------------
-                            dim_L = L_inv.shape[0]
-                            dim_R = R_inv.shape[0]
+                            # dim_L = L_inv.shape[0]
+                            # dim_R = R_inv.shape[0]
                             
-                            L_inv.mul_(math.sqrt(dim_L) / (torch.linalg.norm(L_inv) + eps))
-                            R_inv.mul_(math.sqrt(dim_R) / (torch.linalg.norm(R_inv) + eps))
+                            # L_inv.mul_(math.sqrt(dim_L) / (torch.linalg.norm(L_inv) + eps))
+                            # R_inv.mul_(math.sqrt(dim_R) / (torch.linalg.norm(R_inv) + eps))
                             
                             state["L_inv"] = L_inv
                             state["R_inv"] = R_inv
