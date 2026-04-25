@@ -248,7 +248,7 @@ class Hyperparameters:
     sequence_length : int = 1024
     num_iterations : int = 5100
     warmup_iters : int = 0
-    warmdown_iters : int = 500
+    warmdown_iters : int = 1450
     weight_decay : float = 0
     # evaluation and logging hyperparams
     val_loss_every : int = 125
@@ -468,7 +468,7 @@ if __name__ == "__main__":
         "power_frequency": 50,
         "eps":1e-8,
         "order": 4,
-        "warmup_iter":1000,
+        "warmup_iter":0,
         "use_dual_norm":False
     }
 
