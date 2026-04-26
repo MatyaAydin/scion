@@ -470,6 +470,7 @@ if __name__ == "__main__":
         "beta": 0.99,
         "eig_update_freq": 10,
         "eps":1e-8,
+        "use_dual_norm":False
     }
 
     train_loss = main(args, optim_args)
