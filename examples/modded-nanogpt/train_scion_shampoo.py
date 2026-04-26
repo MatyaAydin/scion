@@ -247,8 +247,8 @@ class Hyperparameters:
     device_batch_size : int = 64
     sequence_length : int = 1024
     num_iterations : int = 5100
-    warmup_iters : int = 50
-    warmdown_iters : int = 500
+    warmup_iters : int = 0
+    warmdown_iters : int = 1450
     weight_decay : float = 0
     # evaluation and logging hyperparams
     val_loss_every : int = 125
@@ -344,7 +344,7 @@ def main(args, optim_args):
 
     # begin logging
     if master_process:
-        study_name = f"logs_scionshampoo_lr_{optim_args['lr']}_eps_{optim_args['eps']}_powerfreq_{optim_args['power_frequency']}_tracenorm_{optim_args['use_trace_normalization']}_order_{optim_args['order']}_warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}"
+        study_name = "logs_scionshampoo_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + "warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}"
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
         logfile = f"logs_scionshampoo/{study_name}.txt"
@@ -465,13 +465,14 @@ if __name__ == "__main__":
 
     # Default optim args — only the swept param changes each iteration
     optim_args = {
-        "lr": 1e-3,
+        "lr": 0.00036,
         "momentum": 0.9,
-        "beta": 0.95,
+        "beta": 0.99,
         "use_trace_normalization": False,
         "power_frequency": 50,
         "eps":1e-8,
-        "order": 4
+        "order": 4,
+        "use_dual_norm": False
     }
 
     train_loss = main(args, optim_args)

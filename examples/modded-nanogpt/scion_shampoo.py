@@ -257,7 +257,7 @@ class ScionShampoo(torch.optim.Optimizer):
         >>> optimizer = Scion(optim_groups, lr=2**-12, momentum=0.1)
     """
     def __init__(self, params, lr=1e-3, momentum=1.0, norm: str='Auto', norm_kwargs: dict=None, scale=1.0, unconstrained=False,
-                beta=0.999, order=8, eps=1e-8, power_frequency=50, use_trace_normalization=False):
+                beta=0.999, order=8, eps=1e-8, power_frequency=50, use_trace_normalization=False, use_dual_norm=True):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
@@ -265,7 +265,7 @@ class ScionShampoo(torch.optim.Optimizer):
         if norm_kwargs is None:
             norm_kwargs = {}
         defaults = dict(lr=lr, momentum=momentum, scale=scale, unconstrained=unconstrained, norm=norm, norm_kwargs=norm_kwargs,
-        beta=beta, order=order, eps=eps, power_frequency=power_frequency, use_trace_normalization=use_trace_normalization)
+        beta=beta, order=order, eps=eps, power_frequency=power_frequency, use_trace_normalization=use_trace_normalization, use_dual_norm=use_dual_norm)
         super().__init__(params, defaults)
         self.effective_lrs = {}
 
@@ -276,13 +276,13 @@ class ScionShampoo(torch.optim.Optimizer):
             scale = group['scale']
             unconstrained = group['unconstrained']
             norm_backend = norm_dict[group['norm']](**group['norm_kwargs'])
-            is_sign = group['norm'] == 'Sign'
 
             order = group["order"]
             beta = group["beta"]
             eps = group["eps"]
             power_frequency = group["power_frequency"]
             use_trace_normalization = group["use_trace_normalization"]
+            use_dual_norm = group["use_dual_norm"]
 
             for p in group['params']:
                 g = p.grad
@@ -290,68 +290,54 @@ class ScionShampoo(torch.optim.Optimizer):
                     continue
                 state = self.state[p]
 
-                if is_sign:
-                    # Default Scion: no precond and no need to cast to 2d
-                    if momentum != 1:
-                        if 'momentum_buffer' not in state.keys():
-                            state['momentum_buffer'] = torch.zeros_like(g)
-                        buf = state['momentum_buffer']
-                        buf.mul_(momentum).add_(g, alpha=1. - momentum)
-                        g = buf
-                    update = scale * norm_backend.lmo(g)
-                    effective_lr = scale * lr
-                    self.effective_lrs[group['norm']] = effective_lr
-                    if unconstrained:
-                        p.data.add_(update, alpha=-lr)
-                    else:
-                        p.data.mul_(1 - lr).add_(update, alpha=-lr)
 
-                else:
-                    # ScionShampoo path
-                    g_2d = to_2d(g).float()
+                g_2d = to_2d(g).float()
 
-                    if "step" not in state:
-                        state["step"] = 0
-                    state["step"] += 1
-                    iter_number = state["step"]
+                if "step" not in state:
+                    state["step"] = 0
+                state["step"] += 1
+                iter_number = state["step"]
 
-                    if 'momentum_buffer' not in state.keys():
-                        state['momentum_buffer'] = torch.clone(g_2d)
-                    buf = state['momentum_buffer']
-                    if iter_number > 1:
-                        buf.mul_(momentum).add_(g_2d, alpha=1. - momentum)
+                if 'momentum_buffer' not in state.keys():
+                    state['momentum_buffer'] = torch.clone(g_2d)
+                buf = state['momentum_buffer']
+                if iter_number > 1:
+                    buf.mul_(momentum).add_(g_2d, alpha=1. - momentum)
 
-                    if "L_buffer" not in state.keys():
-                        state["L_buffer"] = eps * torch.eye(g_2d.shape[0], g_2d.shape[0], device=g.device, dtype=g_2d.dtype)
-                        state["R_buffer"] = eps * torch.eye(g_2d.shape[1], g_2d.shape[1], device=g.device, dtype=g_2d.dtype)
-                        state["L_inv"] = None
-                        state["R_inv"] = None
+                if "L_buffer" not in state.keys():
+                    state["L_buffer"] = eps * torch.eye(g_2d.shape[0], g_2d.shape[0], device=g.device, dtype=g_2d.dtype)
+                    state["R_buffer"] = eps * torch.eye(g_2d.shape[1], g_2d.shape[1], device=g.device, dtype=g_2d.dtype)
+                    state["L_inv"] = None
+                    state["R_inv"] = None
 
-                    L = state["L_buffer"]
-                    R = state["R_buffer"]
+                L = state["L_buffer"]
+                R = state["R_buffer"]
 
-                    L.mul_(beta).add_(g_2d.matmul(g_2d.T), alpha=1 - beta)
-                    R.mul_(beta).add_(g_2d.T.matmul(g_2d), alpha=1 - beta)
+                L.mul_(beta).add_(g_2d.matmul(g_2d.T), alpha=1 - beta)
+                R.mul_(beta).add_(g_2d.T.matmul(g_2d), alpha=1 - beta)
 
-                    if iter_number % power_frequency == 1 or state["L_inv"] is None:
-                        L_inv, R_inv = compute_LR_inv(L, R, order=order, eps_stab=eps, use_trace_normalization=use_trace_normalization)
-                        state["L_inv"] = L_inv
-                        state["R_inv"] = R_inv
+                if iter_number % power_frequency == 1 or state["L_inv"] is None:
+                    L_inv, R_inv = compute_LR_inv(L, R, order=order, eps_stab=eps, use_trace_normalization=use_trace_normalization)
+                    state["L_inv"] = L_inv
+                    state["R_inv"] = R_inv
 
-                    L_inv = state["L_inv"]
-                    R_inv = state["R_inv"]
+                L_inv = state["L_inv"]
+                R_inv = state["R_inv"]
 
-                    lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
+                lmo_ = weighted_norm_LR_lmo(norm_backend, buf, L_inv, R_inv)
+                if use_dual_norm:
                     dual_norm = (lmo_ * buf).sum()
-                    update = scale * lmo_ * dual_norm
-                    effective_lr = scale * dual_norm * lr
-                    self.effective_lrs[group['norm']] = effective_lr
+                else:
+                    dual_norm = 1.
+                update = scale * lmo_ * dual_norm
+                effective_lr = scale * dual_norm * lr
+                self.effective_lrs[group['norm']] = effective_lr
 
-                    update = update.reshape(g.shape)
+                update = update.reshape(g.shape)
 
-                    if not unconstrained:
-                        p.data.mul_(1 - lr)
-                    p.data.add_(update, alpha=-lr)
+                if not unconstrained:
+                    p.data.mul_(1 - lr)
+                p.data.add_(update, alpha=-lr)
 
 
     def init(self):
