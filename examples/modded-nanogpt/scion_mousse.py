@@ -340,7 +340,7 @@ class MousseScion(torch.optim.Optimizer):
         self,
         params,
         lr: float = 1e-3,
-        momentum: float = 0.1,
+        momentum: float = 0.9,
         norm: str = 'Auto',
         norm_kwargs: dict = None,
         scale: float = 1.0,
@@ -446,7 +446,7 @@ class MousseScion(torch.optim.Optimizer):
                 # m_t = (1-μ) · m_{t-1}  +  μ · G_t
                 buf = state['momentum_buffer']
                 if t > 1:
-                    buf.mul_(1.0 - momentum).add_(g_2d, alpha=momentum)
+                    buf.mul_(momentum).add_(g_2d, alpha=1. - momentum)
                 # On t=1 buf was initialised to g_2d, consistent with Scion.
  
                 # ═════════════════════════════════════════════════════════════
