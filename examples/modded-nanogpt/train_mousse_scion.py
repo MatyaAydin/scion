@@ -439,8 +439,8 @@ def main(args, optim_args):
         for opt, sched in zip(optimizers, schedulers):
             opt.step()
             sched.step()
-            spec_effective_lr = opt.effective_lrs["Spectral"]
-            eucl_effective_lr = opt.effective_lrs["Sign"]
+            spec_effective_lr = 0. #opt.effective_lrs["Spectral"]
+            eucl_effective_lr = 0. #opt.effective_lrs["Sign"]
         # null the gradients
         model.zero_grad(set_to_none=True)
         # --------------- TRAINING SECTION END -------------------
