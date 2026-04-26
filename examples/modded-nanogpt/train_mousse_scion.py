@@ -465,7 +465,7 @@ if __name__ == "__main__":
 
     # Default optim args — only the swept param changes each iteration
     optim_args = {
-        "lr": 1e-4,
+        "lr": 5*1e-5,
         "momentum": 0.9,
         "beta": 0.99,
         "eig_update_freq": 10,
