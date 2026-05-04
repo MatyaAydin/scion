@@ -321,10 +321,7 @@ class MousseScion(torch.optim.Optimizer):
         use_trace_normalization (bool): Normalize L and R by their traces before decomposition,
                                   making eigenvalue magnitudes scale-invariant (default: True).
         LR_correction (bool):     Apply bias correction to L and R EMAs (default: True).
-        use_dual_norm (bool):     Multiply update by ρ = ⟨lmo(·), ·⟩ (duality gap).
-                                  Set False to get a pure direction-only update (default: True).
-        apply_grafting (bool):    After unwhitening rescale u to match the pre-unwhiten LMO norm.
-                                  No effect when skip_preconditioning=True (default: True).
+        apply_grafting str:    str: fro for frobenius norm, dual for dual norm
         skip_preconditioning (bool | None):
                                   If True, bypass L/R curvature tracking and all
                                   whitening/unwhitening ops for this parameter group — the LMO
@@ -351,8 +348,7 @@ class MousseScion(torch.optim.Optimizer):
         eig_update_freq: int = 10,
         use_trace_normalization: bool = True,
         LR_correction: bool = True,
-        use_dual_norm: bool = True,
-        apply_grafting: bool = True,
+        apply_grafting: bool = "fro",
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -380,7 +376,6 @@ class MousseScion(torch.optim.Optimizer):
             eig_update_freq=eig_update_freq,
             use_trace_normalization=use_trace_normalization,
             LR_correction=LR_correction,
-            use_dual_norm=use_dual_norm,
             apply_grafting=apply_grafting,
         )
         super().__init__(params, defaults)
@@ -407,7 +402,6 @@ class MousseScion(torch.optim.Optimizer):
             eig_update_freq      = group['eig_update_freq']
             use_trace_norm       = group['use_trace_normalization']
             LR_correction        = group['LR_correction']
-            use_dual_norm        = group['use_dual_norm']
             apply_grafting       = group['apply_grafting']
  
             # ── Resolve skip_preconditioning for this group ──────────────────
@@ -460,11 +454,7 @@ class MousseScion(torch.optim.Optimizer):
                     u = norm_backend.lmo(buf)
  
                     # ── Step 3s: Dual norm in original space ──────────────────
-                    # ρ = ⟨lmo(m_t), m_t⟩
-                    if use_dual_norm:
-                        rho = (u * buf).sum()
-                    else:
-                        rho = torch.tensor(1.0, device=g.device, dtype=torch.float32)
+                    rho = torch.tensor(1.0, device=g.device, dtype=torch.float32)
  
                     # No grafting needed — no eigenvalue round-trip distortion.
  
@@ -536,16 +526,11 @@ class MousseScion(torch.optim.Optimizer):
  
                     # ── Step 7: Graft reference norm ───────────────────────────
                     # n* = ‖u‖_F  (measured immediately after LMO, before unwhitening)
-                    if apply_grafting:
+                    if apply_grafting == "fro":
                         graft_norm = u.norm()
- 
-                    # ── Step 8: Dual norm (duality gap contribution) ───────────
-                    # ρ = ⟨lmo(M̃), M̃⟩  computed in whitened space so it is
-                    # invariant to the unwhitening distortion.
-                    if use_dual_norm:
-                        rho = (u * M_white).sum()
-                    else:
-                        rho = torch.tensor(1.0, device=g.device, dtype=torch.float32)
+                    else: # use dual norm
+                        graft_norm = (u * M_white).sum()
+                    rho = torch.tensor(1.0, device=g.device, dtype=torch.float32)
  
                     # ── Step 9: Unwhitening ────────────────────────────────────
                     # u_{ij} /= λ_i^(L,α) · λ_j^(R,α),  then u = Q_L u Q_R^T
@@ -557,7 +542,7 @@ class MousseScion(torch.optim.Optimizer):
                     # u ← (n* / ‖u‖_F) · u
                     # Restores the Frobenius norm that the eigenvalue round-trip
                     # (whitening × 2) would otherwise distort by λ^(-2α) per side.
-                    if apply_grafting:
+                    if apply_grafting: # normalize by frobenius norm regardless of fro or dual
                         u_norm = u.norm()
                         if u_norm > eps:
                             u = (graft_norm / u_norm) * u

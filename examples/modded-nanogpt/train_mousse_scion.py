@@ -465,12 +465,12 @@ if __name__ == "__main__":
 
     # Default optim args — only the swept param changes each iteration
     optim_args = {
-        "lr": 5*1e-5,
+        "lr": 0.00036,
         "momentum": 0.9,
         "beta": 0.99,
         "eig_update_freq": 10,
         "eps":1e-8,
-        "use_dual_norm":False
+        "apply_grafting": "dual"
     }
 
     train_loss = main(args, optim_args)
