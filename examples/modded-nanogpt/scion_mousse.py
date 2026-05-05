@@ -379,6 +379,7 @@ class MousseScion(torch.optim.Optimizer):
             apply_grafting=apply_grafting,
         )
         super().__init__(params, defaults)
+        self.effective_lrs = {}
  
     # ------------------------------------------------------------------
     # Core step
@@ -450,13 +451,8 @@ class MousseScion(torch.optim.Optimizer):
                 # For other norms it is a deliberate memory/accuracy trade-off.
                 # ═════════════════════════════════════════════════════════════
                 if skip_precond:
-                    # ── Step 2s: LMO on raw momentum ─────────────────────────
                     u = norm_backend.lmo(buf)
- 
-                    # ── Step 3s: Dual norm in original space ──────────────────
-                    rho = torch.tensor(1.0, device=g.device, dtype=torch.float32)
- 
-                    # No grafting needed — no eigenvalue round-trip distortion.
+                    self.effective_lrs[group['norm']] = scale * lr
  
                 # ═════════════════════════════════════════════════════════════
                 # BRANCH B — full Mousse-Scion preconditioning
@@ -530,7 +526,6 @@ class MousseScion(torch.optim.Optimizer):
                         graft_norm = u.norm()
                     else: # use dual norm
                         graft_norm = (u * M_white).sum()
-                    rho = torch.tensor(1.0, device=g.device, dtype=torch.float32)
  
                     # ── Step 9: Unwhitening ────────────────────────────────────
                     # u_{ij} /= λ_i^(L,α) · λ_j^(R,α),  then u = Q_L u Q_R^T
@@ -546,10 +541,11 @@ class MousseScion(torch.optim.Optimizer):
                         u_norm = u.norm()
                         if u_norm > eps:
                             u = (graft_norm / u_norm) * u
+                        self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
  
                 # ── Step 11: Parameter update (both branches) ─────────────────
                 # w_{t+1} = (1 - η) w_t - η · s · ρ · u
-                update = (scale * rho * u).reshape(g.shape)
+                update = (scale * u).reshape(g.shape)
  
                 if not unconstrained:
                     p.data.mul_(1.0 - lr)          # project toward origin (Frank-Wolfe)

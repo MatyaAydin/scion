@@ -344,7 +344,7 @@ def main(args, optim_args):
 
     # begin logging
     if master_process:
-        study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + "warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}"
+        study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + f"warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}"
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
         logfile = f"logs_moussescion/{study_name}.txt"
@@ -439,8 +439,8 @@ def main(args, optim_args):
         for opt, sched in zip(optimizers, schedulers):
             opt.step()
             sched.step()
-            spec_effective_lr = 0. #opt.effective_lrs["Spectral"]
-            eucl_effective_lr = 0. #opt.effective_lrs["Sign"]
+            spec_effective_lr = opt.effective_lrs["Spectral"]
+            eucl_effective_lr = opt.effective_lrs["Sign"]
         # null the gradients
         model.zero_grad(set_to_none=True)
         # --------------- TRAINING SECTION END -------------------
@@ -465,7 +465,7 @@ if __name__ == "__main__":
 
     # Default optim args — only the swept param changes each iteration
     optim_args = {
-        "lr": 5*1e-5,
+        "lr": 0.00036,
         "momentum": 0.9,
         "beta": 0.99,
         "eig_update_freq": 10,
