@@ -447,8 +447,7 @@ schedulers = [torch.optim.lr_scheduler.LambdaLR(opt, get_lr) for opt in optimize
 
 # begin logging
 if master_process:
-    run_id = str(uuid.uuid4())
-    logfile = 'scionLonger.txt' % run_id
+    logfile = 'scionLonger.txt'
     # create the log file
     with open(logfile, "w") as f:
         # begin the log by printing this file (the Python code)
@@ -511,7 +510,7 @@ for step in range(args.num_iterations + 1):
         training_time_ms += 1000 * (time.time() - t0)
         # save the state of the training process
         log = dict(step=step, code=code, model=raw_model.state_dict(), optimizers=[opt.state_dict() for opt in optimizers])
-        torch.save(log, 'logs/%s/state_step%06d.pt' % (run_id, step))
+        # torch.save(log, 'logs/%s/state_step%06d.pt' % (run_id, step))
         # start the clock again
         torch.cuda.synchronize()
         t0 = time.time()
