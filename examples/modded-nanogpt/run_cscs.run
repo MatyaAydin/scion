@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=train_modded_gpt_optuna
-#SBATCH --time=1:30:00
+#SBATCH --time=2:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=288
@@ -16,4 +16,4 @@ pip install -r ./requirements.txt
 pip install -r ./data/requirements.txt
 
 
-torchrun --standalone --nproc_per_node=4 ./train_scion_shampoo.py
+torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py

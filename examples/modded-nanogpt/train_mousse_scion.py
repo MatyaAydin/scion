@@ -246,8 +246,8 @@ class Hyperparameters:
     batch_size : int = 8*64
     device_batch_size : int = 64
     sequence_length : int = 1024
-    num_iterations : int = 5100
-    warmup_iters : int = 50
+    num_iterations : int = 7500
+    warmup_iters : int = 0
     warmdown_iters : int = 1450
     weight_decay : float = 0
     # evaluation and logging hyperparams
@@ -344,7 +344,7 @@ def main(args, optim_args):
 
     # begin logging
     if master_process:
-        study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + f"warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}"
+        study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + f"warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}_iter{args.num_iterations}"
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
         logfile = f"logs_moussescion/{study_name}.txt"
@@ -467,7 +467,7 @@ if __name__ == "__main__":
     optim_args = {
         "lr": 0.00036,
         "momentum": 0.9,
-        "beta": 0.95,
+        "beta": 0.99,
         "eig_update_freq": 10,
         "eps":1e-8,
         "apply_grafting": "fro"
