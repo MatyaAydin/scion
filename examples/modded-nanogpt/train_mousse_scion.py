@@ -247,7 +247,7 @@ class Hyperparameters:
     device_batch_size : int = 64
     sequence_length : int = 1024
     num_iterations : int = 5100
-    warmup_iters : int = 0
+    warmup_iters : int = 50
     warmdown_iters : int = 1450
     weight_decay : float = 0
     # evaluation and logging hyperparams
@@ -465,7 +465,7 @@ if __name__ == "__main__":
 
     # Default optim args — only the swept param changes each iteration
     optim_args = {
-        "lr": 1e-3,
+        "lr": 0.0036,
         "momentum": 0.9,
         "beta": 0.99,
         "eig_update_freq": 10,
