@@ -246,9 +246,9 @@ class Hyperparameters:
     batch_size : int = 8*64
     device_batch_size : int = 64
     sequence_length : int = 1024
-    num_iterations : int = 7500
-    warmup_iters : int = 0
-    warmdown_iters : int = 2250
+    num_iterations : int = 5100
+    warmup_iters : int = 50
+    warmdown_iters : int = 1450
     weight_decay : float = 0
     # evaluation and logging hyperparams
     val_loss_every : int = 125
@@ -263,8 +263,7 @@ class Hyperparameters:
     momentum : float = 0.9
     scale : float = 50
     last_scale : float = 3000
-    # which hyperparameter to sweep (set via CLI: --sweep lr|momentum|beta_LR|eps)
-    sweep : str = 'momentum'
+    schedule_type: str = "cosine"
 
 
 def main(args, optim_args):
@@ -340,11 +339,20 @@ def main(args, optim_args):
         else:
             decay_ratio = (args.num_iterations - it) / args.warmdown_iters
             return decay_ratio
-    schedulers = [torch.optim.lr_scheduler.LambdaLR(opt, get_lr) for opt in optimizers]
+        
+    def get_lr_cosine(it):
+        if it < args.warmup_iters:
+            return (it + 1) / args.warmup_iters
+        decay_ratio = (it - args.warmup_iters) / (args.num_iterations - args.warmup_iters)
+        decay_ratio = max(0.0, min(1.0, decay_ratio))
+
+        return 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+    schedule = get_lr if args.schedule_type == "LD" else get_lr_cosine
+    schedulers = [torch.optim.lr_scheduler.LambdaLR(opt, schedule) for opt in optimizers]
 
     # begin logging
     if master_process:
-        study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + f"warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}_iter{args.num_iterations}"
+        study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + f"warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}_iter_{args.num_iterations}_sch_{args.schedule_type}"
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
         logfile = f"logs_moussescion/{study_name}.txt"
