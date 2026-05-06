@@ -263,7 +263,8 @@ class Hyperparameters:
     momentum : float = 0.9
     scale : float = 50
     last_scale : float = 3000
-    schedule_type: str = "cosine"
+    schedule_type: str = "LD"
+    lr: float = 0.00036
 
 
 def main(args, optim_args):
@@ -355,7 +356,7 @@ def main(args, optim_args):
         study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + f"warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}_iter_{args.num_iterations}_sch_{args.schedule_type}"
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
-        logfile = f"logs_moussescion/{study_name}.txt"
+        logfile = f"logs_moussedual/{study_name}.txt"
         # create the log file
         with open(logfile, "w") as f:
             import subprocess
@@ -473,12 +474,12 @@ if __name__ == "__main__":
 
     # Default optim args — only the swept param changes each iteration
     optim_args = {
-        "lr": 0.00036,
+        "lr": args.lr,
         "momentum": 0.9,
         "beta": 0.99,
         "eig_update_freq": 10,
         "eps":1e-8,
-        "apply_grafting": "fro"
+        "apply_grafting": "dual"
     }
 
     train_loss = main(args, optim_args)
