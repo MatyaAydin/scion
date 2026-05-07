@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LEARNING_RATES=(3.6e-2 1e-2 3.6e-3 1e-3 3.6e-4 1e-4)
+LEARNING_RATES=(5e-3 3e-3 2e-3 1.5e-3 1.2e-3)
 
 for LR in "${LEARNING_RATES[@]}"; do
     sbatch <<EOF
