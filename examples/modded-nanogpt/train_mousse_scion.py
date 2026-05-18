@@ -247,7 +247,7 @@ class Hyperparameters:
     device_batch_size : int = 64
     sequence_length : int = 1024
     num_iterations : int = 5100
-    warmup_iters : int = 50
+    warmup_iters : int = 0
     warmdown_iters : int = 1450
     weight_decay : float = 0
     # evaluation and logging hyperparams
@@ -265,6 +265,13 @@ class Hyperparameters:
     last_scale : float = 3000
     schedule_type: str = "LD"
     lr: float = 0.00036
+    ns_steps: int = 5
+    log_dir: str = "logs_moussescion"
+    beta: float = 0.99
+    eig_update_freq: int = 10
+    grafting: str = "fro"
+    alpha: float = 0.125
+
 
 
 def main(args, optim_args):
@@ -315,7 +322,7 @@ def main(args, optim_args):
     optim_groups = [{
         'params': raw_model.transformer.h.parameters(), 
             'norm': 'Spectral', 
-            'norm_kwargs': {'steps': 5}, 
+            'norm_kwargs': {'steps': args.ns_steps}, 
             'scale': args.scale,
     }, {
         'params': raw_model.lm_head.parameters(), 
@@ -356,7 +363,7 @@ def main(args, optim_args):
         study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + f"warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}_iter_{args.num_iterations}_sch_{args.schedule_type}"
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
-        logfile = f"logs_moussedual/{study_name}.txt"
+        logfile = f"{args.log_dir}/{study_name}.txt"
         # create the log file
         with open(logfile, "w") as f:
             import subprocess
@@ -476,10 +483,11 @@ if __name__ == "__main__":
     optim_args = {
         "lr": args.lr,
         "momentum": 0.9,
-        "beta": 0.99,
-        "eig_update_freq": 10,
+        "beta": args.beta,
+        "eig_update_freq": args.eig_update_freq,
         "eps":1e-8,
-        "apply_grafting": "dual"
+        "alpha": args.alpha,
+        "apply_grafting": args.grafting
     }
 
     train_loss = main(args, optim_args)
