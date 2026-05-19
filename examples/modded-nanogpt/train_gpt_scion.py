@@ -451,9 +451,6 @@ if master_process:
     # create the log file
     with open(logfile, "w") as f:
         # begin the log by printing this file (the Python code)
-        f.write('='*100 + '\n')
-        f.write(code)
-        f.write('='*100 + '\n')
         # log information about the hardware/software environment this is running on
         # and print the full `nvidia-smi` to file
         f.write(f"Running pytorch {torch.version.__version__} compiled for CUDA {torch.version.cuda}\nnvidia-smi:\n")
