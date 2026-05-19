@@ -364,6 +364,7 @@ class Hyperparameters:
     momentum: float = 0.1
     scale : float = 50
     last_scale : float = 3000
+    ns_steps: int = 5
 
 from datargs import parse
 args = parse(Hyperparameters)
@@ -418,7 +419,7 @@ ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 optim_groups = [{
     'params': raw_model.transformer.h.parameters(), 
         'norm': 'Spectral', 
-        'norm_kwargs': {'steps': 5}, 
+        'norm_kwargs': {'steps': args.ns_steps}, 
         'scale': args.scale,
 }, {
     'params': raw_model.lm_head.parameters(), 
@@ -447,7 +448,7 @@ schedulers = [torch.optim.lr_scheduler.LambdaLR(opt, get_lr) for opt in optimize
 
 # begin logging
 if master_process:
-    logfile = 'scionLonger.txt'
+    logfile = f'./logs_ns_scion/scion_ns_steps_{args.ns_steps}.txt'
     # create the log file
     with open(logfile, "w") as f:
         # begin the log by printing this file (the Python code)
