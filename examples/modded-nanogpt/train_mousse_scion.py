@@ -246,7 +246,7 @@ class Hyperparameters:
     batch_size : int = 8*64
     device_batch_size : int = 64
     sequence_length : int = 1024
-    num_iterations : int = 5100
+    num_iterations : int = 7500
     warmup_iters : int = 0
     warmdown_iters : int = 2250
     weight_decay : float = 0

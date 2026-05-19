@@ -26,6 +26,6 @@ for FREQ in "${FREQUENCIES[@]}"; do
     pip install -r ./requirements.txt
     pip install -r ./data/requirements.txt
 
-    torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py --beta ${BETA} --eig_update_freq ${FREQ} --log_dir ${LOGDIR}
+    torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py --beta ${BETA} --eig-update-freq ${FREQ} --log-dir ${LOGDIR}
     EOF
     done
