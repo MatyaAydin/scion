@@ -363,6 +363,8 @@ def main(args, optim_args):
     # begin logging
     if master_process:
         study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + f"warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}_iter_{args.num_iterations}_sch_{args.schedule_type}"
+        if optim_args.get("eig_schedule", ""):
+            study_name += "".join([f"{k}_{optim_args["eig_schedule"][k]}_" for k in optim_args["eig_schedule"].keys()])
         # logdir = f'logs/{study_name}'
         # os.makedirs(logdir, exist_ok=True)
         logfile = f"{args.log_dir}/{study_name}.txt"
@@ -481,13 +483,13 @@ if __name__ == "__main__":
     dist.init_process_group(backend='nccl')
     args = parse(Hyperparameters)
 
-    eig_schedule = eig_schedule={
-    'eig_warmup_steps': 200,
+    eig_schedule = {
+    'eig_warmup_steps': 250,
     'stable_start':     500,
     'warmdown_start':   5250,
     'total_steps':      7500,
-    'T_init':           10,
-    'T_mid':            50,
+    'T_init':           25,
+    'T_mid':            75,
     'T_warmdown':       500,
 }
 
