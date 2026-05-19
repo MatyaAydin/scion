@@ -271,6 +271,8 @@ class Hyperparameters:
     eig_update_freq: int = 10
     grafting: str = "fro"
     alpha: float = 0.125
+    eig_schedule = None
+
 
 
 
@@ -479,6 +481,16 @@ if __name__ == "__main__":
     dist.init_process_group(backend='nccl')
     args = parse(Hyperparameters)
 
+    eig_schedule = eig_schedule={
+    'eig_warmup_steps': 200,
+    'stable_start':     500,
+    'warmdown_start':   5250,
+    'total_steps':      7500,
+    'T_init':           10,
+    'T_mid':            50,
+    'T_warmdown':       500,
+}
+
     # Default optim args — only the swept param changes each iteration
     optim_args = {
         "lr": args.lr,
@@ -487,7 +499,8 @@ if __name__ == "__main__":
         "eig_update_freq": args.eig_update_freq,
         "eps":1e-8,
         "alpha": args.alpha,
-        "apply_grafting": args.grafting
+        "apply_grafting": args.grafting,
+        "eig_schedule": eig_schedule
     }
 
     train_loss = main(args, optim_args)
