@@ -365,6 +365,7 @@ class Hyperparameters:
     scale : float = 50
     last_scale : float = 3000
     ns_steps: int = 5
+    log_dir: str = "logs_scion"
 
 from datargs import parse
 args = parse(Hyperparameters)
@@ -448,7 +449,7 @@ schedulers = [torch.optim.lr_scheduler.LambdaLR(opt, get_lr) for opt in optimize
 
 # begin logging
 if master_process:
-    logfile = f'./logs_ns_scion/scion_ns_steps_{args.ns_steps}.txt'
+    logfile = f'./{args.log_dir}/scion_ns_steps_{args.ns_steps}.txt'
     # create the log file
     with open(logfile, "w") as f:
         # begin the log by printing this file (the Python code)
