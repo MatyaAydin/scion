@@ -362,7 +362,7 @@ def main(args, optim_args):
 
     # begin logging
     if master_process:
-        study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()]) + f"warmup_{args.warmup_iters}_warmdown_{args.warmdown_iters}_iter_{args.num_iterations}_sch_{args.schedule_type}"
+        study_name = "logs_moussescion_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys()])
         if optim_args.get("eig_schedule", ""):
             study_name += "".join([f"{k}_{optim_args["eig_schedule"][k]}_" for k in optim_args["eig_schedule"].keys()])
         # logdir = f'logs/{study_name}'
