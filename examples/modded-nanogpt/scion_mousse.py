@@ -557,24 +557,32 @@ class MousseScion(torch.optim.Optimizer):
                         # Graft reference norm
                         if apply_grafting == "fro":
                             graft_norm = u.norm()
+                            # Unwhiten
+                            u = u / scale_L.unsqueeze(1)
+                            u = u / scale_R.unsqueeze(0)
+                            u = evec_L @ u @ evec_R.T
+
+                            # Graft
+                            u_norm = u.norm()
+                            if u_norm > eps:
+                                u = scale * (graft_norm / u_norm) * u
+
+                            self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
+
+                        # TODO implement clipped dual norm correctly
                         else:  # "dual"
-                            graft_norm = (u * M_white).sum()
+                            rho = 600
+                            dual_norm = (scale * u * M_white).sum()
+                            eta = min(1., dual_norm.item() / rho)
+                            # Unwhiten
+                            u = u / scale_L.unsqueeze(1)
+                            u = u / scale_R.unsqueeze(0)
+                            u =(scale * eta) * evec_L @ u @ evec_R.T
 
-                        # Unwhiten
-                        u = u / scale_L.unsqueeze(1)
-                        u = u / scale_R.unsqueeze(0)
-                        u = evec_L @ u @ evec_R.T
-
-                        # Graft
-                        u_norm = u.norm()
-                        if u_norm > eps:
-                            u = (graft_norm / u_norm) * u
-
-                        self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
+                            self.effective_lrs[group['norm']] = scale * lr * eta
 
                 # ── Step 7: Parameter update ──────────────────────────────────
-                # w_{t+1} = (1 - η) w_t - η · s · u
-                update = (scale * u).reshape(g.shape)
+                update = u.reshape(g.shape)
                 if not unconstrained:
                     p.data.mul_(1.0 - lr)
                 p.data.add_(update, alpha=-lr)
