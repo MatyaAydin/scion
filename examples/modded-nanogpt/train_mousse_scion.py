@@ -501,8 +501,7 @@ if __name__ == "__main__":
         "eig_update_freq": args.eig_update_freq,
         "eps":1e-8,
         "alpha": args.alpha,
-        "apply_grafting": args.grafting,
-        "grafting": "dual",
+        "apply_grafting": "dual",
         "eig_schedule": None#eig_schedule
     }
 
