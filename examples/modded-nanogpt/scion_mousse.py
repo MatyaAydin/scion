@@ -470,7 +470,7 @@ class MousseScion(torch.optim.Optimizer):
                     continue
 
                 g    = p.grad
-                g_2d = to_2d(g).float()
+                g_2d = to_2d(g)#.float()
                 m, n = g_2d.shape
                 state = self.state[p]
 
