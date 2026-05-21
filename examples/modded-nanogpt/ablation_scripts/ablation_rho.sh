@@ -2,7 +2,7 @@
 
 
 RHOS=(10 25 50 100 250 500)
-LOGDIR="logs_rho"
+LOGDIR="logs_rho_unconstr"
 
 for R in "${RHOS[@]}"; do
     sbatch <<EOF
@@ -23,6 +23,6 @@ cd /iopsstor/scratch/cscs/maydin/scion/examples/modded-nanogpt
 pip install -r ./requirements.txt
 pip install -r ./data/requirements.txt
 
-torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py --thresh ${R} --log-dir ${LOGDIR}
+torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py --thresh ${R} --log-dir ${LOGDIR} --unconstrained True
 EOF
 done
