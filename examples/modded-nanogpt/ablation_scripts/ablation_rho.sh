@@ -23,6 +23,6 @@ cd /iopsstor/scratch/cscs/maydin/scion/examples/modded-nanogpt
 pip install -r ./requirements.txt
 pip install -r ./data/requirements.txt
 
-torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py --thresh ${R} --log-dir ${LOGDIR} --unconstrained True
+torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py --thresh ${R} --log-dir ${LOGDIR} --unconstrained
 EOF
 done
