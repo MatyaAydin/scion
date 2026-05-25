@@ -391,7 +391,7 @@ class MousseScion(torch.optim.Optimizer):
             raise ValueError(f"beta must be in [0,1), got {beta}.")
         if norm not in norm_dict:
             raise ValueError(f"Unknown norm '{norm}'. Choose from {list(norm_dict.keys())}.")
-        if apply_grafting not in ("fro", "dual"):
+        if apply_grafting not in ("fro", "dual", "interpolate"):
             raise ValueError(f"apply_grafting must be 'fro' or 'dual', got '{apply_grafting}'.")
         if norm_kwargs is None:
             norm_kwargs = {}
