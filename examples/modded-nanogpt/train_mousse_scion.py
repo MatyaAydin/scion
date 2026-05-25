@@ -459,8 +459,11 @@ def main(args, optim_args):
         for opt, sched in zip(optimizers, schedulers):
             opt.step()
             sched.step()
-            spec_effective_lr = opt.effective_lrs["Spectral"]
-            eucl_effective_lr = opt.effective_lrs["Sign"]
+            spec_effective_lr = opt.effective_lrs.get("Spectral", "N/A")
+            eucl_effective_lr = opt.effective_lrs.get("Sign", "N/A")
+            spec_fro = opt.fro_norms.get("Spectral", "N/A")
+            spec_dual = opt.dual_norms.get("Spectral", "N/A")
+            spec_denom = opt.denom_norms.get("Spectral", "N/A")
         # null the gradients
         model.zero_grad(set_to_none=True)
         # --------------- TRAINING SECTION END -------------------
@@ -469,9 +472,17 @@ def main(args, optim_args):
         #dist.all_reduce(train_loss, op=dist.ReduceOp.AVG) # all-reducing the training loss would be more correct in terms of logging, but slower
         if master_process:
             approx_time = training_time_ms + 1000 * (time.time() - t0)
-            print(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} eucl elr: {eucl_effective_lr} spec elr: {spec_effective_lr}")
+            
+            fro_str = f"{spec_fro:.4f}" if isinstance(spec_fro, float) else spec_fro
+            dual_str = f"{spec_dual:.4f}" if isinstance(spec_dual, float) else spec_dual
+            denom_str = f"{spec_denom:.4f}" if isinstance(spec_denom, float) else spec_denom
+            
+            log_msg = (f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} "
+                       f"eucl elr: {eucl_effective_lr} spec elr: {spec_effective_lr} "
+                       f"fro: {fro_str} dual: {dual_str} denom: {denom_str}")
+            print(log_msg)
             with open(logfile, "a") as f:
-                f.write(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} eucl elr: {eucl_effective_lr} spec elr: {spec_effective_lr} \n")
+                f.write(log_msg + "\n")
 
     if master_process:
         print(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")

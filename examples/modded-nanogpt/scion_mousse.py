@@ -1,6 +1,6 @@
 import math
 import torch
-
+import os
 
 #######################################################
 # Norm classes (unchanged from ScionShampoo)
@@ -418,6 +418,9 @@ class MousseScion(torch.optim.Optimizer):
         )
         super().__init__(params, defaults)
         self.effective_lrs = {}
+        self.fro_norms = {}
+        self.dual_norms = {}
+        self.denom_norms = {}
 
     # ------------------------------------------------------------------
     # Core step
@@ -463,6 +466,7 @@ class MousseScion(torch.optim.Optimizer):
                         state['R']     = eps * torch.eye(n, device=g.device, dtype=torch.float32)
                         state['eig_L'] = None
                         state['eig_R'] = None
+                        state['eig_update_count'] = 0
 
                 state['step'] += 1
                 t = state['step']
@@ -533,6 +537,23 @@ class MousseScion(torch.optim.Optimizer):
                         state['eig_L'] = (eval_L, evec_L)
                         state['eig_R'] = (eval_R, evec_R)
 
+                        state['eig_update_count'] += 1
+
+                        if state['eig_update_count'] % 5 == 0:
+                            # Create directory if it doesn't exist
+                            save_dir = "eigenvalue_logs"
+                            os.makedirs(save_dir, exist_ok=True)
+                            
+                            # Use the memory address of the parameter id(p) to separate layers, 
+                            # and 't' to mark the global step.
+                            filename = os.path.join(save_dir, f"evals_param{id(p)}_step{t}.pt")
+                            
+                            # Save as a dictionary directly to disk
+                            torch.save({
+                                'eval_L': eval_L.detach().cpu(),
+                                'eval_R': eval_R.detach().cpu()
+                            }, filename)
+
                     # ── Step 6: Whitening / LMO / Unwhitening ─────────────────
                     # If eig_L is still None (Phase 1 of schedule, first step),
                     # fall back to plain Scion for this step — graceful degradation.
@@ -554,11 +575,14 @@ class MousseScion(torch.optim.Optimizer):
                         # LMO in whitened space
                         u = norm_backend.lmo(M_white)
 
+                        fro_norm = u.norm()
+                        dual_norm = (u * M_white).sum() / (min(m, n) ** 0.5)
+
                         # Graft reference norm
                         if apply_grafting == "fro":
-                            graft_norm = u.norm()
+                            graft_norm = fro_norm
                         else:  # "dual"
-                            graft_norm = (u * M_white).sum() / (min(m, n) ** 0.5)
+                            graft_norm = dual_norm
 
                         # Unwhiten
                         u = u / scale_L.unsqueeze(1)
@@ -571,6 +595,9 @@ class MousseScion(torch.optim.Optimizer):
                             u = (graft_norm / u_norm) * u
 
                         self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
+                        self.fro_norms[group['norm']] = fro_norm.item() if hasattr(fro_norm, 'item') else fro_norm
+                        self.dual_norms[group['norm']] = dual_norm.item() if hasattr(dual_norm, 'item') else dual_norm
+                        self.denom_norms[group['norm']] = u_norm.item() if hasattr(u_norm, 'item') else u_norm
 
                 # ── Step 7: Parameter update ──────────────────────────────────
                 # w_{t+1} = (1 - η) w_t - η · s · u
