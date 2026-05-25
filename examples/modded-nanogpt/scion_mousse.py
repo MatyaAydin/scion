@@ -362,7 +362,6 @@ class MousseScion(torch.optim.Optimizer):
         use_trace_normalization (bool): Trace-normalise L,R before eigh (default: True).
         LR_correction (bool):     Bias-correct curvature EMAs (default: True).
         apply_grafting (str):     'fro' (default) or 'dual'.
-        rho (float):              Clipping threshold for dual grafting (default: 600).
     """
 
     def __init__(
@@ -382,7 +381,6 @@ class MousseScion(torch.optim.Optimizer):
         use_trace_normalization: bool = True,
         LR_correction: bool = True,
         apply_grafting: str = "fro",
-        rho: float = 600.0,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -417,7 +415,6 @@ class MousseScion(torch.optim.Optimizer):
             use_trace_normalization=use_trace_normalization,
             LR_correction=LR_correction,
             apply_grafting=apply_grafting,
-            rho=rho,
         )
         super().__init__(params, defaults)
         self.effective_lrs = {}
@@ -446,31 +443,14 @@ class MousseScion(torch.optim.Optimizer):
             use_trace_norm  = group['use_trace_normalization']
             LR_correction   = group['LR_correction']
             apply_grafting  = group['apply_grafting']
-            rho             = group['rho']
             skip_precond    = group['norm'] == 'Sign'
 
-            # ── Dual grafting: two-pass bookkeeping ───────────────────────────
-            # Pass 1 accumulates the global dual norm across all params in the
-            # group; Pass 2 applies the single resulting eta uniformly.
-            # For all other grafting modes we do everything in a single pass.
-            use_dual = (apply_grafting == "dual") and (not skip_precond)
-            if use_dual:
-                dual_norm_accum = torch.tensor(
-                    0.0,
-                    device=next(
-                        (p.device for p in group['params'] if p.grad is not None),
-                        torch.device('cpu'),
-                    ),
-                )
-                dual_updates = {}   # p → u tensor (whitened, pre-eta)
-
-            # ── Pass 1 (or single pass for fro / Sign) ────────────────────────
             for p in group['params']:
                 if p.grad is None:
                     continue
 
                 g    = p.grad
-                g_2d = to_2d(g)#.float()
+                g_2d = to_2d(g).float()
                 m, n = g_2d.shape
                 state = self.state[p]
 
@@ -499,11 +479,6 @@ class MousseScion(torch.optim.Optimizer):
                     u = norm_backend.lmo(buf)
                     self.effective_lrs[group['norm']] = scale * lr
 
-                    update = u.reshape(g.shape)
-                    if not unconstrained:
-                        p.data.mul_(1.0 - lr)
-                    p.data.add_(update, alpha=-lr)
-
                 # ═════════════════════════════════════════════════════════════
                 # BRANCH B — full Mousse-Scion preconditioning
                 # ═════════════════════════════════════════════════════════════
@@ -522,12 +497,16 @@ class MousseScion(torch.optim.Optimizer):
                         R_hat = state['R']
 
                     # ── Step 4: Resolve effective eig_update_freq ─────────────
+                    # eig_schedule=None  → use fixed eig_update_freq unchanged.
+                    # eig_schedule set   → delegate to scheduler:
+                    #   returns None     → skip eigh this phase (EMA unreliable)
+                    #   returns int T    → refresh if t % T == 1 or first call
                     if eig_schedule is None:
                         run_eigh = (t % eig_update_freq == 1 or state['eig_L'] is None)
                     else:
                         effective_T = get_eig_update_freq(t, eig_schedule)
                         if effective_T is None:
-                            run_eigh = False
+                            run_eigh = False   # Phase 1: skip entirely
                         else:
                             run_eigh = (t % effective_T == 1 or state['eig_L'] is None)
 
@@ -555,17 +534,11 @@ class MousseScion(torch.optim.Optimizer):
                         state['eig_R'] = (eval_R, evec_R)
 
                     # ── Step 6: Whitening / LMO / Unwhitening ─────────────────
-                    # Graceful degradation: if eig_L is still None (Phase 1 of
-                    # schedule on very first step), fall back to plain Scion.
+                    # If eig_L is still None (Phase 1 of schedule, first step),
+                    # fall back to plain Scion for this step — graceful degradation.
                     if state['eig_L'] is None:
                         u = norm_backend.lmo(buf)
                         self.effective_lrs[group['norm']] = scale * lr
-
-                        update = u.reshape(g.shape)
-                        if not unconstrained:
-                            p.data.mul_(1.0 - lr)
-                        p.data.add_(update, alpha=-lr)
-
                     else:
                         eval_L, evec_L = state['eig_L']
                         eval_R, evec_R = state['eig_R']
@@ -581,53 +554,30 @@ class MousseScion(torch.optim.Optimizer):
                         # LMO in whitened space
                         u = norm_backend.lmo(M_white)
 
+                        # Graft reference norm
                         if apply_grafting == "fro":
                             graft_norm = u.norm()
-                            # Unwhiten
-                            u = u / scale_L.unsqueeze(1)
-                            u = u / scale_R.unsqueeze(0)
-                            u = evec_L @ u @ evec_R.T
+                        else:  # "dual"
+                            graft_norm = (u * M_white).sum() / (min(m, n) ** 0.5)
 
-                            # Graft
-                            u_norm = u.norm()
-                            if u_norm > eps:
-                                u = scale * (graft_norm / u_norm) * u
+                        # Unwhiten
+                        u = u / scale_L.unsqueeze(1)
+                        u = u / scale_R.unsqueeze(0)
+                        u = evec_L @ u @ evec_R.T
 
-                            self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
+                        # Graft
+                        u_norm = u.norm()
+                        if u_norm > eps:
+                            u = (graft_norm / u_norm) * u
 
-                            update = u.reshape(g.shape)
-                            if not unconstrained:
-                                p.data.mul_(1.0 - lr)
-                            p.data.add_(update, alpha=-lr)
+                        self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
 
-                        else:  # "dual" — defer update to Pass 2
-                            # Accumulate dual norm in whitened space, where lmo
-                            # was applied: ⟨u, M_white⟩ summed over all params.
-                            dual_norm_accum += (scale * u * M_white).sum()
-                            # Stash everything needed to reconstruct the update.
-                            dual_updates[p] = (u, scale_L, scale_R, evec_L, evec_R, g.shape)
-
-            # ── Pass 2: apply global eta for dual grafting ────────────────────
-            if use_dual and dual_updates:
-                # Sum dual norm across distributed ranks if applicable.
-                if torch.distributed.is_available() and torch.distributed.is_initialized():
-                    torch.distributed.all_reduce(
-                        dual_norm_accum, op=torch.distributed.ReduceOp.SUM
-                    )
-
-                eta = min(1.0, dual_norm_accum.item() / rho)
-                self.effective_lrs[group['norm']] = scale * lr * eta
-
-                for p, (u, scale_L, scale_R, evec_L, evec_R, orig_shape) in dual_updates.items():
-                    # Unwhiten and apply global eta
-                    u = u / scale_L.unsqueeze(1)
-                    u = u / scale_R.unsqueeze(0)
-                    u = (scale * eta) * evec_L @ u @ evec_R.T
-
-                    update = u.reshape(orig_shape)
-                    if not unconstrained:
-                        p.data.mul_(1.0 - group['lr'])
-                    p.data.add_(update, alpha=-group['lr'])
+                # ── Step 7: Parameter update ──────────────────────────────────
+                # w_{t+1} = (1 - η) w_t - η · s · u
+                update = (scale * u).reshape(g.shape)
+                if not unconstrained:
+                    p.data.mul_(1.0 - lr)
+                p.data.add_(update, alpha=-lr)
 
         return loss
 

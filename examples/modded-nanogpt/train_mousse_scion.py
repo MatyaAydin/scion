@@ -271,7 +271,6 @@ class Hyperparameters:
     eig_update_freq: int = 10
     grafting: str = "fro"
     alpha: float = 0.125
-    thresh: float = 600
     eig_schedule = None
 
 
@@ -503,7 +502,6 @@ if __name__ == "__main__":
         "eps":1e-8,
         "alpha": args.alpha,
         "apply_grafting": "dual",
-        "rho": args.thresh,
         "eig_schedule": None#eig_schedule
     }
 
