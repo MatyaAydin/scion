@@ -381,6 +381,7 @@ class MousseScion(torch.optim.Optimizer):
         use_trace_normalization: bool = True,
         LR_correction: bool = True,
         apply_grafting: str = "fro",
+        norm_warmup_steps: int= 500,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -415,6 +416,7 @@ class MousseScion(torch.optim.Optimizer):
             use_trace_normalization=use_trace_normalization,
             LR_correction=LR_correction,
             apply_grafting=apply_grafting,
+            norm_warmup_steps=norm_warmup_steps,
         )
         super().__init__(params, defaults)
         self.effective_lrs = {}
