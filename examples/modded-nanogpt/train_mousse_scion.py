@@ -512,7 +512,7 @@ if __name__ == "__main__":
         "eig_update_freq": 125,
         "eps":1e-8,
         "alpha": args.alpha,
-        "apply_grafting": "interpolate",
+        "apply_grafting": "fro",
         "norm_warmup_steps": args.num_iterations / 10.,
         "eig_schedule": None#eig_schedule
     }
