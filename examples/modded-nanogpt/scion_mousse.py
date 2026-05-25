@@ -539,20 +539,20 @@ class MousseScion(torch.optim.Optimizer):
 
                         state['eig_update_count'] += 1
 
-                        if state['eig_update_count'] % 5 == 0:
-                            # Create directory if it doesn't exist
-                            save_dir = "eigenvalue_logs"
-                            os.makedirs(save_dir, exist_ok=True)
+                        # if state['eig_update_count'] % 5 == 0:
+                        #     # Create directory if it doesn't exist
+                        #     save_dir = "eigenvalue_logs"
+                        #     os.makedirs(save_dir, exist_ok=True)
                             
-                            # Use the memory address of the parameter id(p) to separate layers, 
-                            # and 't' to mark the global step.
-                            filename = os.path.join(save_dir, f"evals_param{id(p)}_step{t}.pt")
+                        #     # Use the memory address of the parameter id(p) to separate layers, 
+                        #     # and 't' to mark the global step.
+                        #     filename = os.path.join(save_dir, f"evals_param{id(p)}_step{t}.pt")
                             
-                            # Save as a dictionary directly to disk
-                            torch.save({
-                                'eval_L': eval_L.detach().cpu(),
-                                'eval_R': eval_R.detach().cpu()
-                            }, filename)
+                        #     # Save as a dictionary directly to disk
+                        #     torch.save({
+                        #         'eval_L': eval_L.detach().cpu(),
+                        #         'eval_R': eval_R.detach().cpu()
+                        #     }, filename)
 
                     # ── Step 6: Whitening / LMO / Unwhitening ─────────────────
                     # If eig_L is still None (Phase 1 of schedule, first step),
@@ -592,9 +592,12 @@ class MousseScion(torch.optim.Optimizer):
                         # Graft
                         u_norm = u.norm()
                         if u_norm > eps:
-                            u = (graft_norm / u_norm) * u
-
-                        self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
+                            if apply_grafting == "fro":
+                                u = (graft_norm / u_norm) * u
+                                self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
+                            else: # try dual without normalization
+                                u = graft_norm * u
+                                self.effective_lrs[group['norm']] = lr * scale * graft_norm
                         self.fro_norms[group['norm']] = fro_norm.item() if hasattr(fro_norm, 'item') else fro_norm
                         self.dual_norms[group['norm']] = dual_norm.item() if hasattr(dual_norm, 'item') else dual_norm
                         self.denom_norms[group['norm']] = u_norm.item() if hasattr(u_norm, 'item') else u_norm
