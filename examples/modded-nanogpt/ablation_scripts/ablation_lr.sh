@@ -22,6 +22,6 @@ cd /iopsstor/scratch/cscs/maydin/scion/examples/modded-nanogpt
 pip install -r ./requirements.txt
 pip install -r ./data/requirements.txt
 
-torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py --lr ${LR} --eig-update-freq 125 --log-dir ${LOGDIR} --apply-grafting "interpolate"
+torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py --lr ${LR} --eig-update-freq 125 --log-dir ${LOGDIR} --grafting "interpolate"
 EOF
 done
