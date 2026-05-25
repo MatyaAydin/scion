@@ -513,6 +513,7 @@ if __name__ == "__main__":
         "eps":1e-8,
         "alpha": args.alpha,
         "apply_grafting": "dual",
+        "norm_warmup_steps": args.num_iterations / 10.,
         "eig_schedule": None#eig_schedule
     }
 

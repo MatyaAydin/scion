@@ -3,7 +3,7 @@
 cd ..
 
 LEARNING_RATES=(5e-5 1e-4 0.00036 1e-3 5e-3 1e-2)
-LOGDIR="logs_lr_dual_nofro"
+LOGDIR="logs_lr_interpolate"
 
 for LR in "${LEARNING_RATES[@]}"; do
     sbatch <<EOF

@@ -576,11 +576,16 @@ class MousseScion(torch.optim.Optimizer):
                         u = norm_backend.lmo(M_white)
 
                         fro_norm = u.norm()
-                        dual_norm = (u * M_white).sum() / (min(m, n) ** 0.5)
+                        dual_norm = (u * M_white).sum() #/ (min(m, n) ** 0.5)
 
                         # Graft reference norm
                         if apply_grafting == "fro":
                             graft_norm = fro_norm
+                        elif apply_grafting == "interpolate":
+                            warmup_steps = group.get('norm_warmup_steps', 500.)
+                            tau_k = min(1.0, t / warmup_steps)
+                            graft_norm = (1. - tau_k) * fro_norm + tau_k * dual_norm
+
                         else:  # "dual"
                             graft_norm = dual_norm
 
@@ -592,12 +597,9 @@ class MousseScion(torch.optim.Optimizer):
                         # Graft
                         u_norm = u.norm()
                         if u_norm > eps:
-                            if apply_grafting == "fro":
-                                u = (graft_norm / u_norm) * u
-                                self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
-                            else: # try dual without normalization
-                                u = graft_norm * u
-                                self.effective_lrs[group['norm']] = lr * scale * graft_norm
+                            u = (graft_norm / u_norm) * u
+
+                        self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
                         self.fro_norms[group['norm']] = fro_norm.item() if hasattr(fro_norm, 'item') else fro_norm
                         self.dual_norms[group['norm']] = dual_norm.item() if hasattr(dual_norm, 'item') else dual_norm
                         self.denom_norms[group['norm']] = u_norm.item() if hasattr(u_norm, 'item') else u_norm
