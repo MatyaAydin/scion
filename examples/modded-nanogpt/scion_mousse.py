@@ -588,10 +588,6 @@ class MousseScion(torch.optim.Optimizer):
                         state['smoothed_ratio'] = beta_scale * state['smoothed_ratio'] + (1.0 - beta_scale) * current_ratio
                         norm_ratio = state['smoothed_ratio']
 
-                        # 3. Use the smoothed ratio
-                        if apply_grafting == "dual_ratio":
-                            graft_norm = state['smoothed_ratio']
-
                         # Graft reference norm
                         if apply_grafting == "fro":
                             graft_norm = fro_norm
