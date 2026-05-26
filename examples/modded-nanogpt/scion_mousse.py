@@ -391,7 +391,7 @@ class MousseScion(torch.optim.Optimizer):
             raise ValueError(f"beta must be in [0,1), got {beta}.")
         if norm not in norm_dict:
             raise ValueError(f"Unknown norm '{norm}'. Choose from {list(norm_dict.keys())}.")
-        if apply_grafting not in ("fro", "dual", "interpolate"):
+        if apply_grafting not in ("fro", "dual", "interpolate", "ratio", "lmo"):
             raise ValueError(f"apply_grafting must be 'fro' or 'dual', got '{apply_grafting}'.")
         if norm_kwargs is None:
             norm_kwargs = {}
@@ -423,6 +423,7 @@ class MousseScion(torch.optim.Optimizer):
         self.fro_norms = {}
         self.dual_norms = {}
         self.denom_norms = {}
+        self.norm_ratios = {}
 
     # ------------------------------------------------------------------
     # Core step
@@ -579,10 +580,15 @@ class MousseScion(torch.optim.Optimizer):
 
                         fro_norm = M_white.norm()
                         dual_norm = (u * M_white).sum() #/ (min(m, n) ** 0.5)
+                        norm_ratio = dual_norm / fro_norm.clamp(min=eps)
 
                         # Graft reference norm
                         if apply_grafting == "fro":
                             graft_norm = fro_norm
+                        elif apply_grafting == "lmo": # is actually equal to sqrt(d)
+                            graft_norm = u.norm()
+                        elif apply_grafting == "ratio":
+                            graft_norm = norm_ratio
                         elif apply_grafting == "interpolate":
                             warmup_steps = group.get('norm_warmup_steps', 500.)
                             tau_k = min(1.0, t / warmup_steps)
@@ -605,6 +611,7 @@ class MousseScion(torch.optim.Optimizer):
                         self.fro_norms[group['norm']] = fro_norm.item() if hasattr(fro_norm, 'item') else fro_norm
                         self.dual_norms[group['norm']] = dual_norm.item() if hasattr(dual_norm, 'item') else dual_norm
                         self.denom_norms[group['norm']] = u_norm.item() if hasattr(u_norm, 'item') else u_norm
+                        self.norm_ratios[group['norm']] = norm_ratio.item() if hasattr(norm_ratio, 'item') else norm_ratio
 
                 # ── Step 7: Parameter update ──────────────────────────────────
                 # w_{t+1} = (1 - η) w_t - η · s · u

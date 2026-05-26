@@ -464,6 +464,7 @@ def main(args, optim_args):
             spec_fro = opt.fro_norms.get("Spectral", "N/A")
             spec_dual = opt.dual_norms.get("Spectral", "N/A")
             spec_denom = opt.denom_norms.get("Spectral", "N/A")
+            spec_ratio = opt.norm_ratios.get("Spectral", "N/A")
         # null the gradients
         model.zero_grad(set_to_none=True)
         # --------------- TRAINING SECTION END -------------------
@@ -476,10 +477,11 @@ def main(args, optim_args):
             fro_str = f"{spec_fro:.4f}" if isinstance(spec_fro, float) else spec_fro
             dual_str = f"{spec_dual:.4f}" if isinstance(spec_dual, float) else spec_dual
             denom_str = f"{spec_denom:.4f}" if isinstance(spec_denom, float) else spec_denom
+            ratio_str = f"{spec_ratio:.4f}" if isinstance(spec_denom, float) else spec_ratio
             
             log_msg = (f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} "
                        f"eucl elr: {eucl_effective_lr} spec elr: {spec_effective_lr} "
-                       f"fro: {fro_str} dual: {dual_str} denom: {denom_str}")
+                       f"fro: {fro_str} dual: {dual_str} denom: {denom_str} ratio: {ratio_str}")
             print(log_msg)
             with open(logfile, "a") as f:
                 f.write(log_msg + "\n")
