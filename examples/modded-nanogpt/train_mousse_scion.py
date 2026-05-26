@@ -272,6 +272,7 @@ class Hyperparameters:
     grafting: str = "fro"
     alpha: float = 0.125
     eig_schedule = None
+    beta_scale: float = 0.9
 
 
 
@@ -516,6 +517,7 @@ if __name__ == "__main__":
         "alpha": args.alpha,
         "apply_grafting": args.grafting,
         "norm_warmup_steps": args.num_iterations / 10.,
+        "beta_scale": args.beta_scale,
         "eig_schedule": None#eig_schedule
     }
 

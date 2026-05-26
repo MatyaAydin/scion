@@ -381,7 +381,8 @@ class MousseScion(torch.optim.Optimizer):
         use_trace_normalization: bool = True,
         LR_correction: bool = True,
         apply_grafting: str = "fro",
-        norm_warmup_steps: int= 500,
+        norm_warmup_steps: int = 500,
+        beta_scale: float = 0.9,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -417,6 +418,7 @@ class MousseScion(torch.optim.Optimizer):
             LR_correction=LR_correction,
             apply_grafting=apply_grafting,
             norm_warmup_steps=norm_warmup_steps,
+            beta_scale=beta_scale,
         )
         super().__init__(params, defaults)
         self.effective_lrs = {}
@@ -449,6 +451,7 @@ class MousseScion(torch.optim.Optimizer):
             use_trace_norm  = group['use_trace_normalization']
             LR_correction   = group['LR_correction']
             apply_grafting  = group['apply_grafting']
+            beta_scale      = group['beta_scale']
             skip_precond    = group['norm'] == 'Sign'
 
             for p in group['params']:
@@ -584,7 +587,6 @@ class MousseScion(torch.optim.Optimizer):
                         dual_norm = (u * M_white).sum() #/ (min(m, n) ** 0.5)
                         current_ratio = dual_norm / fro_norm.clamp(min=eps)
 
-                        beta_scale = 0.9
                         state['smoothed_ratio'] = beta_scale * state['smoothed_ratio'] + (1.0 - beta_scale) * current_ratio
                         norm_ratio = state['smoothed_ratio']
 
