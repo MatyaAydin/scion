@@ -1,7 +1,7 @@
 #!/bin/bash
 
 LEARNING_RATES=(1e-5 5e-5 1e-4 0.00036 1e-3 5e-3)
-LOGDIR="logs_ratio"
+LOGDIR="logs_ratio_ema"
 
 for LR in "${LEARNING_RATES[@]}"; do
     sbatch <<EOF

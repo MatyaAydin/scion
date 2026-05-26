@@ -464,6 +464,8 @@ class MousseScion(torch.optim.Optimizer):
                 if len(state) == 0:
                     state['step']            = 0
                     state['momentum_buffer'] = g_2d.clone()
+
+                    state['smoothed_ratio']  = (min(m, n)) ** 0.5
                     if not skip_precond:
                         state['L']     = eps * torch.eye(m, device=g.device, dtype=torch.float32)
                         state['R']     = eps * torch.eye(n, device=g.device, dtype=torch.float32)
@@ -580,7 +582,15 @@ class MousseScion(torch.optim.Optimizer):
 
                         fro_norm = M_white.norm()
                         dual_norm = (u * M_white).sum() #/ (min(m, n) ** 0.5)
-                        norm_ratio = dual_norm / fro_norm.clamp(min=eps)
+                        current_ratio = dual_norm / fro_norm.clamp(min=eps)
+
+                        beta_scale = 0.9
+                        state['smoothed_ratio'] = beta_scale * state['smoothed_ratio'] + (1.0 - beta_scale) * current_ratio
+                        norm_ratio = state['smoothed_ratio']
+
+                        # 3. Use the smoothed ratio
+                        if apply_grafting == "dual_ratio":
+                            graft_norm = state['smoothed_ratio']
 
                         # Graft reference norm
                         if apply_grafting == "fro":
