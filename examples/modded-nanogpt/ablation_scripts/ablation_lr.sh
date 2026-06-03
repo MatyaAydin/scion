@@ -1,7 +1,7 @@
 #!/bin/bash
 
-LEARNING_RATES=(1e-5 5e-5 1e-4 0.00036 1e-3 5e-3)
-LOGDIR="logs_ratio_ema"
+LEARNING_RATES=(1e-6 1e-5 5e-5 1e-4 0.00036 1e-3 5e-3 1e-2)
+LOGDIR="logs_prescion_lr"
 
 for LR in "${LEARNING_RATES[@]}"; do
     sbatch <<EOF
@@ -22,6 +22,6 @@ cd /iopsstor/scratch/cscs/maydin/scion/examples/modded-nanogpt
 pip install -r ./requirements.txt
 pip install -r ./data/requirements.txt
 
-torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py --lr ${LR} --eig-update-freq 125 --log-dir ${LOGDIR} --grafting "ratio"
+torchrun --standalone --nproc_per_node=4 ./train_mousse_scion.py --lr ${LR} --log-dir ${LOGDIR}
 EOF
 done
