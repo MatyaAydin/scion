@@ -1,14 +1,14 @@
 #!/bin/bash
 
 
-ORDERS=(0.125 0.25 0.5)
-LOGDIR="logs_order"
+ORDERS=(0.0625 0.125 0.25 0.5)
+LOGDIR="logs_prescion_order"
 
 for ORD in "${ORDERS[@]}"; do
     sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=train_gpt_order_${ORD}
-#SBATCH --time=2:00:00
+#SBATCH --time=1:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=288

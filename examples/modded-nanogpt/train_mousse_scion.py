@@ -266,10 +266,10 @@ class Hyperparameters:
     schedule_type: str = "LD"
     lr: float = 0.00036
     ns_steps: int = 5
-    log_dir: str = "logs_moussescion"
+    log_dir: str = "logs_prescion"
     beta: float = 0.99
-    eig_update_freq: int = 10
-    grafting: str = "fro"
+    eig_update_freq: int = 125
+    grafting: str = "ratio"
     alpha: float = 0.125
     eig_schedule = None
     beta_scale: float = 0.9
@@ -512,7 +512,7 @@ if __name__ == "__main__":
         "lr": args.lr,
         "momentum": 0.9,
         "beta": args.beta,
-        "eig_update_freq": 125,
+        "eig_update_freq": args.eig_update_freq,
         "eps":1e-8,
         "alpha": args.alpha,
         "apply_grafting": args.grafting,
