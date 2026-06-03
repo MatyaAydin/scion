@@ -2,16 +2,16 @@
 
 cd ..
 
-FREQUENCIES=(10 25 50 100 200 250 500)
+FREQUENCIES=(10 25 50 125 250 500 750)
 BETAS=(0.85 0.9 0.95 0.99 0.999)
-LOGIDR="logs_grid"
+LOGIDR="logs_prescion_grid"
 
 for FREQ in "${FREQUENCIES[@]}"; do
     for BETA in "${BETAS[@]}"; do
         sbatch <<EOF
     #!/bin/bash
     #SBATCH --job-name=train_gpt_grid_${FREQ}_${BETA}
-    #SBATCH --time=2:00:00
+    #SBATCH --time=4:00:00
     #SBATCH --nodes=1
     #SBATCH --ntasks-per-node=1
     #SBATCH --cpus-per-task=288
