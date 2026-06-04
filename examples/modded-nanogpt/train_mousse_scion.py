@@ -523,7 +523,7 @@ if __name__ == "__main__":
         "beta_scale": args.beta_scale,
         "eig_schedule": None,#eig_schedule,
         "use_trace_normalization": False,#args.use_trace_normalization,
-        "LR_correction": args.LR_correction
+        "LR_correction": False#args.LR_correction
     }
 
     train_loss = main(args, optim_args)
