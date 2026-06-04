@@ -273,6 +273,9 @@ class Hyperparameters:
     alpha: float = 0.125
     eig_schedule = None
     beta_scale: float = 0.9
+    eps: float = 1e-8
+    use_trace_normalization: bool = True
+    LR_correction: bool = True
 
 
 
@@ -364,7 +367,6 @@ def main(args, optim_args):
     # begin logging
     if master_process:
         study_name = "logs_" + "".join([f"{k}_{optim_args[k]}_" for k in optim_args.keys() if k != "eig_schedule"])
-        study_name += f"ns_steps_{args.ns_steps}"
         if optim_args.get("eig_schedule", ""):
             study_name += "".join([f"{k}_{optim_args["eig_schedule"][k]}_" for k in optim_args["eig_schedule"].keys()])
         # logdir = f'logs/{study_name}'
@@ -514,12 +516,14 @@ if __name__ == "__main__":
         "momentum": 0.9,
         "beta": args.beta,
         "eig_update_freq": args.eig_update_freq,
-        "eps":1e-8,
+        "eps":args.eps,
         "alpha": args.alpha,
         "apply_grafting": args.grafting,
         "norm_warmup_steps": args.num_iterations / 10.,
         "beta_scale": args.beta_scale,
-        "eig_schedule": None#eig_schedule
+        "eig_schedule": None,#eig_schedule,
+        "use_trace_normalization": args.use_trace_normalization,
+        "LR_correction": args.LR_correction
     }
 
     train_loss = main(args, optim_args)
