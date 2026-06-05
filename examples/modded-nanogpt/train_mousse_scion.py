@@ -522,8 +522,6 @@ if __name__ == "__main__":
         "norm_warmup_steps": args.num_iterations / 10.,
         "beta_scale": args.beta_scale,
         "eig_schedule": None,#eig_schedule,
-        "use_trace_normalization": args.use_trace_normalization,
-        "LR_correction": args.LR_correction
     }
 
     train_loss = main(args, optim_args)
