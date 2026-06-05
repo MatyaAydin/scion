@@ -611,9 +611,10 @@ class MousseScion(torch.optim.Optimizer):
                         u = evec_L @ u @ evec_R.T
 
                         # Graft
-                        u_norm = u.norm()
-                        if u_norm > eps:
-                            u = (graft_norm / u_norm) * u
+                        # u_norm = u.norm()
+                        # if u_norm > eps:
+                        #     u = (graft_norm / u_norm) * u
+                        u_norm = 1.
 
                         self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
                         self.fro_norms[group['norm']] = fro_norm.item() if hasattr(fro_norm, 'item') else fro_norm
