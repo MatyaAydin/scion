@@ -326,8 +326,6 @@ def main(args, optim_args):
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
     if master_process:
-        import os
-        import json
         os.makedirs("eigenvalue_logs", exist_ok=True)
         
         # We map `raw_model` to get clean names like "transformer.h.0.mlp.c_proj"
