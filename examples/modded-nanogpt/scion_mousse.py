@@ -547,20 +547,27 @@ class MousseScion(torch.optim.Optimizer):
 
                         state['eig_update_count'] += 1
 
-                        # if state['eig_update_count'] % 4 == 0:
-                        #     # Create directory if it doesn't exist
-                        #     save_dir = "eigenvalue_logs"
-                        #     os.makedirs(save_dir, exist_ok=True)
+                        if state['eig_update_count']:
+                            # ── ADD THIS CHECK ──
+                            # Check if distributed is initialized. If not, it's single GPU (safe to save).
+                            # If it is, only let rank 0 save to avoid ID mismatch and file corruption.
+                            import torch.distributed as dist
+                            is_master = not dist.is_initialized() or dist.get_rank() == 0
                             
-                        #     # Use the memory address of the parameter id(p) to separate layers, 
-                        #     # and 't' to mark the global step.
-                        #     filename = os.path.join(save_dir, f"evals_param{id(p)}_step{t}.pt")
-                            
-                        #     # Save as a dictionary directly to disk
-                        #     torch.save({
-                        #         'eval_L': eval_L.detach().cpu(),
-                        #         'eval_R': eval_R.detach().cpu()
-                        #     }, filename)
+                            if is_master:
+                                # Create directory if it doesn't exist
+                                save_dir = "eigenvalue_logs"
+                                os.makedirs(save_dir, exist_ok=True)
+                                
+                                # Use the memory address of the parameter id(p) to separate layers, 
+                                # and 't' to mark the global step.
+                                filename = os.path.join(save_dir, f"evals_param{id(p)}_step{t}.pt")
+                                
+                                # Save as a dictionary directly to disk
+                                torch.save({
+                                    'eval_L': eval_L.detach().cpu(),
+                                    'eval_R': eval_R.detach().cpu()
+                                }, filename)
 
                     # ── Step 6: Whitening / LMO / Unwhitening ─────────────────
                     # If eig_L is still None (Phase 1 of schedule, first step),

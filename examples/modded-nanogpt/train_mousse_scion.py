@@ -18,6 +18,7 @@ import torch.distributed as dist
 import torch._inductor.config as config
 from torch.nn.parallel import DistributedDataParallel as DDP
 from datargs import parse
+import json
 
 from scion_mousse import MousseScion
 
@@ -323,6 +324,18 @@ def main(args, optim_args):
     model = DDP(model, device_ids=[ddp_local_rank])
     raw_model = model.module # always contains the "raw" unwrapped model
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+
+    if master_process:
+        import os
+        import json
+        os.makedirs("eigenvalue_logs", exist_ok=True)
+        
+        # We map `raw_model` to get clean names like "transformer.h.0.mlp.c_proj"
+        # instead of the messy "_orig_mod.module..." prefixes added by compile/DDP
+        param_mapping = {str(id(p)): name for name, p in raw_model.named_parameters()}
+        
+        with open("eigenvalue_logs/param_mapping.json", "w") as f:
+            json.dump(param_mapping, f, indent=4)
 
     # init the optimizer(s)
     optim_groups = [{
