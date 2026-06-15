@@ -29,6 +29,7 @@ import optuna
 from scion_LR import ScionSteepest
 from scion import Scion
 from ada_scion import AdaScion
+from scion_mousse import MousseScion
 
 from torch.optim import AdamW
 
@@ -418,6 +419,11 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
         elif optimizer_name == "adascion":
             optimizer = AdaScion(parameters, **extra_params)
             optimizer2_trainbias = AdaScion(norm='BiasRMS', scale=radius, params=[whiten_bias], **extra_params)
+        elif optimizer_name == "mousse_scion":
+            # eig_update_freq is passed via extra_params (set to len(train_loader) in __main__
+            # so eigendecompositions refresh exactly once per epoch).
+            optimizer = MousseScion(parameters, **extra_params)
+            optimizer2_trainbias = MousseScion(norm='BiasRMS', scale=radius, params=[whiten_bias], **extra_params)
         else:
             optimizer = Scion(parameters, **extra_params)
             optimizer2_trainbias = Scion(norm='BiasRMS', scale=radius, params=[whiten_bias], **extra_params)
@@ -440,6 +446,8 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
             optimizer = ScionSteepest(parameters, **extra_params)
         elif optimizer_name == "adascion":
             optimizer = AdaScion(parameters, **extra_params)
+        elif optimizer_name == "mousse_scion":
+            optimizer = MousseScion(parameters, **extra_params)
         else:
             optimizer = Scion(parameters, **extra_params)
         optimizer_freezebias = optimizer
@@ -463,17 +471,14 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
         def get_lr(step):
             return 1 - step / total_train_steps
 
-        if optimizer_name == "scion_steepest" or optimizer_name == "adascion":
-            # scheduler_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer_trainbias, get_lr)
-            # scheduler2_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer2_trainbias, get_lr)
-            # scheduler_freezebias = torch.optim.lr_scheduler.LambdaLR(optimizer_freezebias, get_lr)
-
+        if optimizer_name in ("scion_steepest", "adascion", "mousse_scion"):
+            # Warmup → constant → linear-decay schedule
             warmup_steps = 2 * len(train_loader)
             constant_steps = int(constant_ratio * total_train_steps)
 
-            scheduler_trainbias = custom_scheduler(optimizer_trainbias, warmup_steps=warmup_steps, constant_steps=constant_steps,  total_steps=total_train_steps)
-            scheduler2_trainbias = custom_scheduler(optimizer2_trainbias, warmup_steps=warmup_steps, constant_steps=constant_steps,  total_steps=total_train_steps)
-            scheduler_freezebias = custom_scheduler(optimizer_freezebias, warmup_steps=warmup_steps, constant_steps=constant_steps,  total_steps=total_train_steps)
+            scheduler_trainbias = custom_scheduler(optimizer_trainbias, warmup_steps=warmup_steps, constant_steps=constant_steps, total_steps=total_train_steps)
+            scheduler2_trainbias = custom_scheduler(optimizer2_trainbias, warmup_steps=warmup_steps, constant_steps=constant_steps, total_steps=total_train_steps)
+            scheduler_freezebias = custom_scheduler(optimizer_freezebias, warmup_steps=warmup_steps, constant_steps=constant_steps, total_steps=total_train_steps)
 
         else:
             scheduler_trainbias = torch.optim.lr_scheduler.LambdaLR(optimizer_trainbias, get_lr)
@@ -574,6 +579,13 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
                         dual_norm_group.setdefault(gidx, []).append(val.item() if hasattr(val, 'item') else val)
                     for gidx, val in opt.preconditioner_norms.items():
                         precond_norm_group.setdefault(gidx, []).append(val.item() if hasattr(val, 'item') else val)
+                elif isinstance(opt, MousseScion):
+                    for gidx, eff_val in opt.effective_lrs.items():
+                        effective_lrs_group.setdefault(gidx, []).append(eff_val.item() if hasattr(eff_val, 'item') else eff_val)
+                    for gidx, val in opt.fro_norms.items():
+                        dual_norm_group.setdefault(gidx, []).append(val)
+                    for gidx, val in opt.denom_norms.items():
+                        precond_norm_group.setdefault(gidx, []).append(val)
 
             current_steps += 1
             if current_steps >= total_train_steps:
@@ -751,11 +763,27 @@ if __name__ == "__main__":
 
         }
 
+        # Steps per epoch = ceil(50000 / batch_size).
+        # With batch_size=2000 this is 25 steps/epoch.
+        # Setting eig_update_freq = steps_per_epoch means eigendecompositions
+        # refresh exactly once per epoch — cheap enough for short CIFAR-10 runs.
+        steps_per_epoch = ceil(50000 // hyp['opt']['batch_size'])
+        mousse_scion_params = {
+            "lr": 1e-3,
+            "momentum": 0.9,
+            "beta": 0.99,
+            "alpha": 0.125,
+            "eig_update_freq": steps_per_epoch,  # once per epoch
+            "apply_grafting": "ratio",
+            "beta_scale": 0.9,
+        }
+
         optimizers = {
-            "adamw":adam_params,
-            "scion":scion_params,
-            "scion_steepest":scion_steepest_params,
-            "adascion":adascion_params
+            "adamw": adam_params,
+            "scion": scion_params,
+            "scion_steepest": scion_steepest_params,
+            "adascion": adascion_params,
+            "mousse_scion": mousse_scion_params,
         }
 
 
@@ -811,26 +839,37 @@ if __name__ == "__main__":
 
             return acc, loss, val_accs
 
-        acc_steepest, loss_steepest, val_accs_steepest = run_from_hparams("steepestscion-study", "scion_steepest", do_plot=True)
-        # acc_ada, loss_ada, val_accs_ada = run_from_hparams("adascion-study", "adascion")
+        # acc_steepest, loss_steepest, val_accs_steepest = run_from_hparams("steepestscion-study", "scion_steepest", do_plot=True)
+        acc_ada, loss_ada, val_accs_ada = run_from_hparams("adascion-study", "adascion")
+
+        # ── MousseScion benchmark ──────────────────────────────────────────────
+        print(f"{'='*30} mousse_scion {'='*30}")
+        acc_mousse, loss_mousse, val_accs_mousse = main(
+            1, model_trainbias, model_freezebias,
+            extra_params=mousse_scion_params,
+            optimizer_name="mousse_scion",
+            constant_ratio=0.6,
+            do_plot=False,
+        )
 
         # plt.plot(range(len(loss_steepest)), loss_steepest, label="steepest scion")
         # plt.plot(range(len(loss_ada)), loss_ada, label="adascion")
 
         # plt.plot(range(len(val_accs_steepest)), val_accs_steepest, label="steepest scion")
-        # plt.plot(range(len(val_accs_ada)), val_accs_ada, label="adascion")
+        plt.plot(range(len(val_accs_ada)), val_accs_ada, label="adascion")
+        plt.plot(range(len(val_accs_mousse)), val_accs_mousse, label="mousse_scion")
 
 
         
         # loss_muon = np.load("./loss/muon_loss_25.npy")
         # plt.plot(range(len(loss_muon)), loss_muon, label="muon")
 
-        # plt.title("CIFAR10 validation accuracy")
-        # plt.legend(loc="lower right")
-        # plt.xlabel("Iteration")
-        # plt.ylabel("Accuracy")
-        # plt.savefig(f"./plots/val_acc_comparison.png")
-        # plt.clf()
+        plt.title("CIFAR10 validation accuracy")
+        plt.legend(loc="lower right")
+        plt.xlabel("Iteration")
+        plt.ylabel("Accuracy")
+        plt.savefig(f"./plots/val_acc_comparison_mousse.png")
+        plt.clf()
 
         # study_name = "loss-adascion-study"  # Unique identifier of the study.
         # storage_name = f"sqlite:///{study_name}.db"
