@@ -532,8 +532,9 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
 
     loss_history = []
     val_accuracies = []
+    val_losses = []
     effective_lrs_group = {}
-    dual_norm_group = {} 
+    dual_norm_group = {}
     precond_norm_group = {}
 
 
@@ -604,8 +605,12 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
         # Save the accuracy and loss from the last training batch of the epoch
         train_acc = (outputs.detach().argmax(1) == labels).float().mean().item()
         train_loss = loss.item() / batch_size
-        val_acc = evaluate(model, test_loader, tta_level=0)
+        # Reuse a single infer() call to get both val accuracy and val loss
+        val_logits = infer(model, test_loader, tta_level=0)
+        val_acc = (val_logits.argmax(1) == test_loader.labels).float().mean().item()
+        val_loss = loss_fn(val_logits, test_loader.labels).mean().item()
         val_accuracies.append(val_acc)
+        val_losses.append(val_loss)
         print_training_details(locals(), is_final_entry=False)
         run = None # Only print the run number once
 
@@ -675,7 +680,7 @@ def main(run, model_trainbias, model_freezebias, extra_params, optimizer_name="s
     print_training_details(locals(), is_final_entry=True)
 
 
-    return tta_val_acc, np.array(loss_history), np.array(val_accuracies)
+    return tta_val_acc, np.array(loss_history), np.array(val_accuracies), np.array(val_losses)
 
 
 #######################################################
@@ -719,7 +724,7 @@ if __name__ == "__main__":
             constant_ratio = trial.suggest_float("constant_ratio", 0.1, 0.9)
             
             try:
-                acc, loss, _ = main("train", model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="adascion", constant_ratio=constant_ratio, do_plot=False)
+                acc, loss, _, _ = main("train", model_trainbias, model_freezebias, extra_params=extra_params, optimizer_name="adascion", constant_ratio=constant_ratio, do_plot=False)
                 min_loss = float(np.nanmin(loss))
                         
                 if np.isnan(min_loss) or np.isinf(min_loss):
@@ -767,7 +772,7 @@ if __name__ == "__main__":
         # With batch_size=2000 this is 25 steps/epoch.
         # Setting eig_update_freq = steps_per_epoch means eigendecompositions
         # refresh exactly once per epoch — cheap enough for short CIFAR-10 runs.
-        steps_per_epoch = ceil(50000 // hyp['opt']['batch_size'])
+        steps_per_epoch = 25#ceil(50000 // hyp['opt']['batch_size'])
         mousse_scion_params = {
             "lr": 2**log2lr,
             "momentum": 0.4,
@@ -835,7 +840,7 @@ if __name__ == "__main__":
             best_hparam = study.best_params
             cst_ratio = best_hparam.pop("constant_ratio")
 
-            acc, loss, val_accs = main("train", model_trainbias, model_freezebias, extra_params=best_hparam, optimizer_name=optimizer_name, constant_ratio=cst_ratio, do_plot=do_plot)
+            acc, loss, val_accs, _ = main("train", model_trainbias, model_freezebias, extra_params=best_hparam, optimizer_name=optimizer_name, constant_ratio=cst_ratio, do_plot=do_plot)
 
             return acc, loss, val_accs
 
@@ -847,7 +852,7 @@ if __name__ == "__main__":
              extra_params=scion_params, optimizer_name="scion")
 
         print(f"{'='*30} scion {'='*30}")
-        acc_scion, loss_scion, val_accs_scion = main(
+        acc_scion, loss_scion, val_accs_scion, val_losses_scion = main(
             1, model_trainbias, model_freezebias,
             extra_params=scion_params,
             optimizer_name="scion",
@@ -862,7 +867,7 @@ if __name__ == "__main__":
              extra_params=mousse_scion_params, optimizer_name="mousse_scion")
 
         print(f"{'='*30} PreScion {'='*30}")
-        acc_mousse, loss_mousse, val_accs_mousse = main(
+        acc_mousse, loss_mousse, val_accs_mousse, val_losses_mousse = main(
             1, model_trainbias, model_freezebias,
             extra_params=mousse_scion_params,
             optimizer_name="mousse_scion",
@@ -870,13 +875,32 @@ if __name__ == "__main__":
             do_plot=False,
         )
 
-        # ── Plot comparison ────────────────────────────────────────────────────
+        # ── Plot 1: validation accuracy ───────────────────────────────────────
         plt.plot(range(len(val_accs_scion)),  val_accs_scion,  label="Scion")
         plt.plot(range(len(val_accs_mousse)), val_accs_mousse, label="PreScion")
-
         plt.title("CIFAR10 validation accuracy")
         plt.legend(loc="lower right")
         plt.xlabel("Epoch")
         plt.ylabel("Accuracy")
-        plt.savefig(f"./plots/val_acc_comparison_mousse.pdf")
+        plt.savefig("./plots/val_acc_comparison_mousse.png")
+        plt.clf()
+
+        # ── Plot 2: training loss (per step) ───────────────────────────────
+        plt.plot(range(len(loss_scion)),  loss_scion,  label="Scion",    alpha=0.7)
+        plt.plot(range(len(loss_mousse)), loss_mousse, label="PreScion", alpha=0.7)
+        plt.title("CIFAR10 training loss")
+        plt.legend(loc="upper right")
+        plt.xlabel("Step")
+        plt.ylabel("Loss")
+        plt.savefig("./plots/train_loss_comparison_mousse.pdf")
+        plt.clf()
+
+        # ── Plot 3: validation loss (per epoch) ───────────────────────────
+        plt.plot(range(len(val_losses_scion)),  val_losses_scion,  label="Scion")
+        plt.plot(range(len(val_losses_mousse)), val_losses_mousse, label="PreScion")
+        plt.title("CIFAR10 validation loss")
+        plt.legend(loc="upper right")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.savefig("./plots/val_loss_comparison_mousse.pdf")
         plt.clf()
