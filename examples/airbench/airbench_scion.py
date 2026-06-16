@@ -860,20 +860,50 @@ if __name__ == "__main__":
             do_plot=False,
         )
 
-        # ── MousseScion (PreScion) benchmark ───────────────────────────────────
-        # Warmup with mousse_scion so torch.compile sees its optimizer path.
+        # ── PreScion grid search: 20 LR × 9 constant_ratio = 180 runs ─────────
+        # One warmup compile pass, then sweep.
         print(f"{'='*30} PreScion (warmup) {'='*30}")
         main('warmup', model_trainbias, model_freezebias,
              extra_params=mousse_scion_params, optimizer_name="mousse_scion")
 
-        print(f"{'='*30} PreScion {'='*30}")
-        acc_mousse, loss_mousse, val_accs_mousse, val_losses_mousse = main(
-            1, model_trainbias, model_freezebias,
-            extra_params=mousse_scion_params,
-            optimizer_name="mousse_scion",
-            constant_ratio=1/2,   # decay over last third of training (epochs ~17–25)
-            do_plot=False,
+        lr_sweep    = np.logspace(np.log10(1e-3), np.log10(0.5), 20)
+        cst_sweep   = [round(0.1 * i, 1) for i in range(1, 10)]  # 0.1 … 0.9
+
+        best_lr_mousse        = None
+        best_cst_mousse       = None
+        best_acc_mousse       = -1.0
+        loss_mousse           = None
+        val_accs_mousse       = None
+        val_losses_mousse     = None
+
+        for cst_val in cst_sweep:
+            for lr_val in lr_sweep:
+                sweep_params = {**mousse_scion_params, "lr": lr_val}
+                print(f"{'='*20} PreScion lr={lr_val:.4e}  cst={cst_val:.1f} {'='*20}")
+                try:
+                    acc, loss_h, val_accs_h, val_losses_h = main(
+                        1, model_trainbias, model_freezebias,
+                        extra_params=sweep_params,
+                        optimizer_name="mousse_scion",
+                        constant_ratio=cst_val,
+                        do_plot=False,
+                    )
+                    if acc > best_acc_mousse:
+                        best_acc_mousse   = acc
+                        best_lr_mousse    = lr_val
+                        best_cst_mousse   = cst_val
+                        loss_mousse       = loss_h
+                        val_accs_mousse   = val_accs_h
+                        val_losses_mousse = val_losses_h
+                except Exception as e:
+                    print(f"  lr={lr_val:.4e} cst={cst_val:.1f} failed: {e}")
+
+        print(
+            f"\n>>> Best PreScion — lr: {best_lr_mousse:.4e} | "
+            f"constant_ratio: {best_cst_mousse:.1f} | "
+            f"TTA val acc: {best_acc_mousse:.4f}\n"
         )
+
 
         # ── Plot 1: validation accuracy ───────────────────────────────────────
         plt.plot(range(len(val_accs_scion)),  val_accs_scion,  label="Scion")
