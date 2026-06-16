@@ -64,7 +64,7 @@ hyp = {
     },
     'opt': {
         'svd_backend': 'newton',
-        'train_epochs': 25,
+        'train_epochs': 40,
         'batch_size': 2000,
         'lr': 6.5,                 # learning rate per 1024 examples
         'momentum': 0.85,
@@ -775,7 +775,7 @@ if __name__ == "__main__":
             "alpha": 0.125,
             "eig_update_freq": steps_per_epoch,  # once per epoch
             "apply_grafting": "ratio",
-            "beta_scale": 0.9,
+            "beta_scale": 0.7,
         }
 
         optimizers = {
@@ -866,7 +866,7 @@ if __name__ == "__main__":
             1, model_trainbias, model_freezebias,
             extra_params=mousse_scion_params,
             optimizer_name="mousse_scion",
-            constant_ratio=0.6,
+            constant_ratio=2/3,   # decay over last third of training (epochs ~17–25)
             do_plot=False,
         )
 
