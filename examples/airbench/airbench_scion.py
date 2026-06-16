@@ -769,8 +769,8 @@ if __name__ == "__main__":
         # refresh exactly once per epoch — cheap enough for short CIFAR-10 runs.
         steps_per_epoch = ceil(50000 // hyp['opt']['batch_size'])
         mousse_scion_params = {
-            "lr": 1e-3,
-            "momentum": 0.9,
+            "lr": 2**log2lr,
+            "momentum": 0.4,
             "beta": 0.99,
             "alpha": 0.125,
             "eig_update_freq": steps_per_epoch,  # once per epoch
@@ -840,7 +840,7 @@ if __name__ == "__main__":
             return acc, loss, val_accs
 
         # acc_steepest, loss_steepest, val_accs_steepest = run_from_hparams("steepestscion-study", "scion_steepest", do_plot=True)
-        acc_ada, loss_ada, val_accs_ada = run_from_hparams("adascion-study", "adascion")
+        # acc_ada, loss_ada, val_accs_ada = run_from_hparams("adascion-study", "adascion")
 
         # ── MousseScion benchmark ──────────────────────────────────────────────
         print(f"{'='*30} mousse_scion {'='*30}")
@@ -856,7 +856,7 @@ if __name__ == "__main__":
         # plt.plot(range(len(loss_ada)), loss_ada, label="adascion")
 
         # plt.plot(range(len(val_accs_steepest)), val_accs_steepest, label="steepest scion")
-        plt.plot(range(len(val_accs_ada)), val_accs_ada, label="adascion")
+        # plt.plot(range(len(val_accs_ada)), val_accs_ada, label="adascion")
         plt.plot(range(len(val_accs_mousse)), val_accs_mousse, label="mousse_scion")
 
 
