@@ -866,8 +866,8 @@ if __name__ == "__main__":
         main('warmup', model_trainbias, model_freezebias,
              extra_params=mousse_scion_params, optimizer_name="mousse_scion")
 
-        lr_sweep    = [0.05]#np.logspace(np.log10(1e-3), np.log10(0.5), 20)
-        cst_sweep   = [2./3.] #[round(0.1 * i, 1) for i in range(1, 10)]  # 0.1 … 0.9
+        lr_sweep    = np.logspace(np.log10(1e-3), np.log10(0.5), 10)
+        cst_sweep   = [round(0.25 * i, 1) for i in range(1, 4)]
 
         best_lr_mousse        = None
         best_cst_mousse       = None
