@@ -325,15 +325,15 @@ def main(args, optim_args):
     raw_model = model.module # always contains the "raw" unwrapped model
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
-    if master_process:
-        os.makedirs("eigenvalue_logs", exist_ok=True)
+    # if master_process:
+    #     os.makedirs("eigenvalue_logs", exist_ok=True)
         
-        # We map `raw_model` to get clean names like "transformer.h.0.mlp.c_proj"
-        # instead of the messy "_orig_mod.module..." prefixes added by compile/DDP
-        param_mapping = {str(id(p)): name for name, p in raw_model.named_parameters()}
+    #     # We map `raw_model` to get clean names like "transformer.h.0.mlp.c_proj"
+    #     # instead of the messy "_orig_mod.module..." prefixes added by compile/DDP
+    #     param_mapping = {str(id(p)): name for name, p in raw_model.named_parameters()}
         
-        with open("eigenvalue_logs/param_mapping.json", "w") as f:
-            json.dump(param_mapping, f, indent=4)
+    #     with open("eigenvalue_logs/param_mapping.json", "w") as f:
+    #         json.dump(param_mapping, f, indent=4)
 
     # init the optimizer(s)
     optim_groups = [{
@@ -512,14 +512,10 @@ if __name__ == "__main__":
     args = parse(Hyperparameters)
 
     eig_schedule = {
-    'eig_warmup_steps': 250,
-    'stable_start':     500,
-    'warmdown_start':   5250,
-    'total_steps':      7500,
-    'T_init':           25,
-    'T_mid':            75,
-    'T_warmdown':       500,
-}
+        'eig_warmup_steps': 500,
+        'warmdown_start': args.num_iterations - args.warmdown_iters,
+        'T_init': 125,
+    }
 
     # Default optim args — only the swept param changes each iteration
     optim_args = {
@@ -527,12 +523,12 @@ if __name__ == "__main__":
         "momentum": 0.9,
         "beta": args.beta,
         "eig_update_freq": args.eig_update_freq,
-        "eps":args.eps,
+        "eps": args.eps,
         "alpha": args.alpha,
         "apply_grafting": args.grafting,
         "norm_warmup_steps": args.num_iterations / 10.,
         "beta_scale": args.beta_scale,
-        "eig_schedule": None,#eig_schedule,
+        "eig_schedule": eig_schedule,
     }
 
     train_loss = main(args, optim_args)

@@ -472,7 +472,7 @@ class MousseScion(torch.optim.Optimizer):
             LR_correction   = group['LR_correction']
             apply_grafting  = group['apply_grafting']
             beta_scale      = group['beta_scale']
-            skip_precond    = group['norm'] == 'Sign'
+            skip_precond    = (group['norm'] != 'Spectral') and (group['norm'] != 'SpectralConv')
 
             for p in group['params']:
                 if p.grad is None:

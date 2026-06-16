@@ -241,68 +241,37 @@ def get_eig_update_freq(t, eig_schedule):
     """
     Compute the effective eig_update_freq at step t given a schedule dict.
 
-    Four-phase schedule designed to minimise eigh calls while preserving
-    the preconditioning quality that matters most:
-
+    Three-phase schedule:
       Phase 1  [0, eig_warmup_steps):
-          Returns None  →  skip eigh entirely.
+          Returns None  →  don't use preconditioning.
 
-      Phase 2a  [eig_warmup_steps, stable_start):
-          Returns T_init  →  frequent refreshes (default 10).
-
-      Phase 2b  [stable_start, warmdown_start]:
-          Linearly interpolates T from T_init to T_mid.
+      Phase 2  [eig_warmup_steps, warmdown_start]:
+          Returns T_init  →  frequent refreshes (e.g. 125).
 
       Phase 3  (warmdown_start, total_steps]:
-          Linearly interpolates T from T_mid to T_warmdown.
+          Returns None  →  don't use preconditioning during warmdown.
 
     Args:
         t (int):             Current global training step.
         eig_schedule (dict): Must contain:
-            'eig_warmup_steps' (int, default 0)  — end of Phase 1.
-            'stable_start'     (int)              — end of Phase 2a /
-                                                    start of Phase 2b ramp.
-                                                    Rule of thumb: ~3/(1-β).
-                                                    With β=0.99 → ~300 steps.
-            'warmdown_start'   (int)              — end of Phase 2b /
-                                                    start of Phase 3.
-            'total_steps'      (int)              — end of Phase 3.
-            'T_init'           (int)              — freq during Phase 2a.
-            'T_mid'            (int)              — freq at start of Phase 3
-                                                    (= end of Phase 2b ramp).
-            'T_warmdown'       (int)              — freq at end of Phase 3.
+            'eig_warmup_steps' (int)  — end of Phase 1.
+            'warmdown_start'   (int)  — end of Phase 2 / start of Phase 3.
+            'T_init'           (int)  — freq during Phase 2.
 
     Returns:
         int | None: Effective eig_update_freq for step t, or None to skip.
     """
-    eig_warmup     = eig_schedule.get('eig_warmup_steps', 0)
-    stable_start   = eig_schedule['stable_start']
-    warmdown_start = eig_schedule['warmdown_start']
-    total_steps    = eig_schedule['total_steps']
-    T_init         = eig_schedule['T_init']
-    T_mid          = eig_schedule['T_mid']
-    T_warmdown     = eig_schedule['T_warmdown']
+    eig_warmup     = eig_schedule.get('eig_warmup_steps', 500)
+    warmdown_start = eig_schedule.get('warmdown_start', 5250)
+    T_init         = eig_schedule.get('T_init', 125)
 
-    # Phase 1 — EMA not yet reliable, skip eigh entirely
     if t < eig_warmup:
         return None
 
-    # Phase 2a — EMA warming up, refresh frequently
-    if t < stable_start:
+    if t <= warmdown_start:
         return T_init
 
-    # Phase 2b — EMA converged, ramp T_init → T_mid to save cost
-    if t <= warmdown_start:
-        stable_len = max(warmdown_start - stable_start, 1)
-        progress   = min((t - stable_start) / stable_len, 1.0)
-        T = T_init + progress * (T_mid - T_init)
-        return max(1, int(round(T)))
-
-    # Phase 3 — lr warmdown, ramp T_mid → T_warmdown aggressively
-    warmdown_len = max(total_steps - warmdown_start, 1)
-    progress     = min((t - warmdown_start) / warmdown_len, 1.0)
-    T = T_mid + progress * (T_warmdown - T_mid)
-    return max(1, int(round(T)))
+    return None
 
 
 #######################################################
@@ -348,16 +317,14 @@ class MousseScion(torch.optim.Optimizer):
         eps (float):              Eigenvalue damping (default: 1e-8).
         eig_update_freq (int):    Fixed eigh frequency. Used only when
                                   eig_schedule is None (default: 10).
-        eig_schedule (dict|None): Three-phase frequency schedule. When set,
+        eig_schedule (dict|None): Frequency schedule. When set,
                                   eig_update_freq is ignored. See
                                   get_eig_update_freq() for full key docs.
-                                  Example for a 9750-step run:
+                                  Example for a 7500-step run:
                                     {
-                                      'eig_warmup_steps': 200,
-                                      'warmdown_start':   7500,
-                                      'total_steps':      9750,
-                                      'T_train':          10,
-                                      'T_warmdown':       200,
+                                      'eig_warmup_steps': 500,
+                                      'warmdown_start':   5250,
+                                      'T_init':           125,
                                     }
         use_trace_normalization (bool): Trace-normalise L,R before eigh (default: True).
         LR_correction (bool):     Bias-correct curvature EMAs (default: True).
@@ -397,8 +364,7 @@ class MousseScion(torch.optim.Optimizer):
         if norm_kwargs is None:
             norm_kwargs = {}
         if eig_schedule is not None:
-            for key in ('stable_start', 'warmdown_start', 'total_steps',
-                        'T_init', 'T_mid', 'T_warmdown'):
+            for key in ('eig_warmup_steps', 'warmdown_start', 'T_init'):
                 if key not in eig_schedule:
                     raise ValueError(f"eig_schedule is missing required key '{key}'.")
 
@@ -452,7 +418,7 @@ class MousseScion(torch.optim.Optimizer):
             LR_correction   = group['LR_correction']
             apply_grafting  = group['apply_grafting']
             beta_scale      = group['beta_scale']
-            skip_precond    = group['norm'] == 'Sign'
+            skip_precond    = (group['norm'] != 'Spectral') and (group['norm'] != 'SpectralConv')
 
             for p in group['params']:
                 if p.grad is None:
@@ -518,7 +484,9 @@ class MousseScion(torch.optim.Optimizer):
                     else:
                         effective_T = get_eig_update_freq(t, eig_schedule)
                         if effective_T is None:
-                            run_eigh = False   # Phase 1: skip entirely
+                            run_eigh = False   # Phase 1 or 3: skip entirely
+                            state['eig_L'] = None
+                            state['eig_R'] = None
                         else:
                             run_eigh = (t % effective_T == 1 or state['eig_L'] is None)
 
@@ -547,27 +515,27 @@ class MousseScion(torch.optim.Optimizer):
 
                         state['eig_update_count'] += 1
 
-                        if state['eig_update_count']:
-                            # ── ADD THIS CHECK ──
-                            # Check if distributed is initialized. If not, it's single GPU (safe to save).
-                            # If it is, only let rank 0 save to avoid ID mismatch and file corruption.
-                            import torch.distributed as dist
-                            is_master = not dist.is_initialized() or dist.get_rank() == 0
+                        # if state['eig_update_count']:
+                        #     # ── ADD THIS CHECK ──
+                        #     # Check if distributed is initialized. If not, it's single GPU (safe to save).
+                        #     # If it is, only let rank 0 save to avoid ID mismatch and file corruption.
+                        #     import torch.distributed as dist
+                        #     is_master = not dist.is_initialized() or dist.get_rank() == 0
                             
-                            if is_master:
-                                # Create directory if it doesn't exist
-                                save_dir = "eigenvalue_logs"
-                                os.makedirs(save_dir, exist_ok=True)
+                        #     if is_master:
+                        #         # Create directory if it doesn't exist
+                        #         save_dir = "eigenvalue_logs"
+                        #         os.makedirs(save_dir, exist_ok=True)
                                 
-                                # Use the memory address of the parameter id(p) to separate layers, 
-                                # and 't' to mark the global step.
-                                filename = os.path.join(save_dir, f"evals_param{id(p)}_step{t}.pt")
+                        #         # Use the memory address of the parameter id(p) to separate layers, 
+                        #         # and 't' to mark the global step.
+                        #         filename = os.path.join(save_dir, f"evals_param{id(p)}_step{t}.pt")
                                 
-                                # Save as a dictionary directly to disk
-                                torch.save({
-                                    'eval_L': eval_L.detach().cpu(),
-                                    'eval_R': eval_R.detach().cpu()
-                                }, filename)
+                        #         # Save as a dictionary directly to disk
+                        #         torch.save({
+                        #             'eval_L': eval_L.detach().cpu(),
+                        #             'eval_R': eval_R.detach().cpu()
+                        #         }, filename)
 
                     # ── Step 6: Whitening / LMO / Unwhitening ─────────────────
                     # If eig_L is still None (Phase 1 of schedule, first step),
