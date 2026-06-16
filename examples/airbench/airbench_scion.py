@@ -776,7 +776,7 @@ if __name__ == "__main__":
         mousse_scion_params = {
             "lr": 2**log2lr,
             "momentum": 0.4,
-            "beta": 0.99,
+            "beta": 0.95,
             "alpha": 0.125,
             "eig_update_freq": steps_per_epoch,  # once per epoch
             "apply_grafting": "ratio",
@@ -871,7 +871,7 @@ if __name__ == "__main__":
             1, model_trainbias, model_freezebias,
             extra_params=mousse_scion_params,
             optimizer_name="mousse_scion",
-            constant_ratio=2/3,   # decay over last third of training (epochs ~17–25)
+            constant_ratio=1/2,   # decay over last third of training (epochs ~17–25)
             do_plot=False,
         )
 
