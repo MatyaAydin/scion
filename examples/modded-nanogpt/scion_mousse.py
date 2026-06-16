@@ -462,8 +462,9 @@ class MousseScion(torch.optim.Optimizer):
                 # ═════════════════════════════════════════════════════════════
                 else:
                     # ── Step 2: Curvature EMA ─────────────────────────────────
-                    state['L'].mul_(beta).add_(g_2d @ g_2d.T, alpha=1.0 - beta)
-                    state['R'].mul_(beta).add_(g_2d.T @ g_2d, alpha=1.0 - beta)
+                    if eig_schedule is None or t <= eig_schedule.get('warmdown_start', float('inf')):
+                        state['L'].mul_(beta).add_(g_2d @ g_2d.T, alpha=1.0 - beta)
+                        state['R'].mul_(beta).add_(g_2d.T @ g_2d, alpha=1.0 - beta)
 
                     # ── Step 3: Bias correction ───────────────────────────────
                     if LR_correction:
@@ -484,9 +485,7 @@ class MousseScion(torch.optim.Optimizer):
                     else:
                         effective_T = get_eig_update_freq(t, eig_schedule)
                         if effective_T is None:
-                            run_eigh = False   # Phase 1 or 3: skip entirely
-                            state['eig_L'] = None
-                            state['eig_R'] = None
+                            run_eigh = False
                         else:
                             run_eigh = (t % effective_T == 1 or state['eig_L'] is None)
 
