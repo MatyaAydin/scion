@@ -839,11 +839,29 @@ if __name__ == "__main__":
 
             return acc, loss, val_accs
 
-        # acc_steepest, loss_steepest, val_accs_steepest = run_from_hparams("steepestscion-study", "scion_steepest", do_plot=True)
-        # acc_ada, loss_ada, val_accs_ada = run_from_hparams("adascion-study", "adascion")
+        # ── Scion baseline ─────────────────────────────────────────────────────
+        # A separate warmup is needed before each optimizer family so that
+        # torch.compile traces the correct computation graph.
+        print(f"{'='*30} scion (warmup) {'='*30}")
+        main('warmup', model_trainbias, model_freezebias,
+             extra_params=scion_params, optimizer_name="scion")
 
-        # ── MousseScion benchmark ──────────────────────────────────────────────
-        print(f"{'='*30} mousse_scion {'='*30}")
+        print(f"{'='*30} scion {'='*30}")
+        acc_scion, loss_scion, val_accs_scion = main(
+            1, model_trainbias, model_freezebias,
+            extra_params=scion_params,
+            optimizer_name="scion",
+            constant_ratio=0.6,
+            do_plot=False,
+        )
+
+        # ── MousseScion (PreScion) benchmark ───────────────────────────────────
+        # Warmup with mousse_scion so torch.compile sees its optimizer path.
+        print(f"{'='*30} PreScion (warmup) {'='*30}")
+        main('warmup', model_trainbias, model_freezebias,
+             extra_params=mousse_scion_params, optimizer_name="mousse_scion")
+
+        print(f"{'='*30} PreScion {'='*30}")
         acc_mousse, loss_mousse, val_accs_mousse = main(
             1, model_trainbias, model_freezebias,
             extra_params=mousse_scion_params,
@@ -852,29 +870,13 @@ if __name__ == "__main__":
             do_plot=False,
         )
 
-        # plt.plot(range(len(loss_steepest)), loss_steepest, label="steepest scion")
-        # plt.plot(range(len(loss_ada)), loss_ada, label="adascion")
-
-        # plt.plot(range(len(val_accs_steepest)), val_accs_steepest, label="steepest scion")
-        # plt.plot(range(len(val_accs_ada)), val_accs_ada, label="adascion")
-        plt.plot(range(len(val_accs_mousse)), val_accs_mousse, label="mousse_scion")
-
-
-        
-        # loss_muon = np.load("./loss/muon_loss_25.npy")
-        # plt.plot(range(len(loss_muon)), loss_muon, label="muon")
+        # ── Plot comparison ────────────────────────────────────────────────────
+        plt.plot(range(len(val_accs_scion)),  val_accs_scion,  label="Scion")
+        plt.plot(range(len(val_accs_mousse)), val_accs_mousse, label="PreScion")
 
         plt.title("CIFAR10 validation accuracy")
         plt.legend(loc="lower right")
-        plt.xlabel("Iteration")
+        plt.xlabel("Epoch")
         plt.ylabel("Accuracy")
-        plt.savefig(f"./plots/val_acc_comparison_mousse.png")
+        plt.savefig(f"./plots/val_acc_comparison_mousse.pdf")
         plt.clf()
-
-        # study_name = "loss-adascion-study"  # Unique identifier of the study.
-        # storage_name = f"sqlite:///{study_name}.db"
-        # # minimize for loss, maximize for accuracy
-        # study = optuna.create_study(direction="minimize", study_name=study_name, storage=storage_name)
-        # study.optimize(objective, n_trials=850)
-
-
