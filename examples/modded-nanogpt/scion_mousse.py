@@ -243,23 +243,28 @@ def get_eig_update_freq(t, eig_schedule):
 
     Three-phase schedule:
       Phase 1  [0, eig_warmup_steps):
-          Returns None  →  don't use preconditioning.
+          Returns None  ->  no eigenbasis exists yet, step() falls back to
+          plain (unpreconditioned) Scion.
 
-      Phase 2  [eig_warmup_steps, warmdown_start]:
-          Returns T_init  →  frequent refreshes (e.g. 125).
+      Phase 2  [eig_warmup_steps, warmdown_start):
+          Returns T_init  ->  frequent refreshes (e.g. 125).
 
-      Phase 3  (warmdown_start, total_steps]:
-          Returns None  →  don't use preconditioning during warmdown.
+      Phase 3  [warmdown_start, total_steps]:
+          Returns None  ->  stop refreshing the eigenbasis. step() keeps
+          reusing whatever L/R eigenbasis was last computed during Phase 2
+          instead of discarding it, so preconditioning stays on through
+          warmdown -- it just stops being updated.
 
     Args:
         t (int):             Current global training step.
         eig_schedule (dict): Must contain:
-            'eig_warmup_steps' (int)  — end of Phase 1.
-            'warmdown_start'   (int)  — end of Phase 2 / start of Phase 3.
-            'T_init'           (int)  — freq during Phase 2.
+            'eig_warmup_steps' (int)  -- end of Phase 1.
+            'warmdown_start'   (int)  -- end of Phase 2 / start of Phase 3.
+            'T_init'           (int)  -- freq during Phase 2.
 
     Returns:
-        int | None: Effective eig_update_freq for step t, or None to skip.
+        int | None: Effective eig_update_freq for step t, or None to skip
+        refreshing the eigenbasis this step.
     """
     eig_warmup     = eig_schedule.get('eig_warmup_steps', 500)
     warmdown_start = eig_schedule.get('warmdown_start', 5250)
@@ -268,7 +273,7 @@ def get_eig_update_freq(t, eig_schedule):
     if t < eig_warmup:
         return None
 
-    if t <= warmdown_start:
+    if t < warmdown_start:
         return T_init
 
     return None
@@ -284,29 +289,29 @@ class MousseScion(torch.optim.Optimizer):
     Mousse-style L,R preconditioning applied to the Scion optimizer.
 
     Update equations (per step t):
-        m_t  =  (1-μ) · m_{t-1}  +  μ · G_t                     [momentum]
+        m_t  =  (1-mu) . m_{t-1}  +  mu . G_t                     [momentum]
 
     When skip_preconditioning is False (full Mousse-Scion path):
-        L_t  =  β · L_{t-1}  +  (1-β) · G_t G_t^T               [left  curvature EMA]
-        R_t  =  β · R_{t-1}  +  (1-β) · G_t^T G_t               [right curvature EMA]
-        (Λ_L, Q_L) = eigh(L̂_t),  (Λ_R, Q_R) = eigh(R̂_t)       [every effective T steps]
-        M̃      =  Q_L^T  m_t  Q_R                                [whiten: rotate]
-        M̃_{ij} /= λ_i^(L,α) · λ_j^(R,α)                        [whiten: scale]
-        u      =  lmo(M̃)
-        n*     =  ‖u‖_F  or  ⟨u, M̃⟩                            [graft reference]
-        u_{ij} /= λ_i^(L,α) · λ_j^(R,α)                        [unwhiten: scale]
+        L_t  =  beta . L_{t-1}  +  (1-beta) . G_t G_t^T           [left  curvature EMA]
+        R_t  =  beta . R_{t-1}  +  (1-beta) . G_t^T G_t           [right curvature EMA]
+        (Lambda_L, Q_L) = eigh(L_hat_t),  (Lambda_R, Q_R) = eigh(R_hat_t)  [every effective T steps]
+        M~      =  Q_L^T  m_t  Q_R                                [whiten: rotate]
+        M~_{ij} /= lambda_i^(L,alpha) . lambda_j^(R,alpha)        [whiten: scale]
+        u      =  lmo(M~)
+        n*     =  ||u||_F  or  <u, M~>                            [graft reference]
+        u_{ij} /= lambda_i^(L,alpha) . lambda_j^(R,alpha)        [unwhiten: scale]
         u      =  Q_L  u  Q_R^T                                  [unwhiten: rotate]
-        u      ←  (n* / ‖u‖_F) · u                              [graft norm]
+        u      <-  (n* / ||u||_F) . u                            [graft norm]
 
     When skip_preconditioning is True (Sign / large-vocab layers):
         u  =  lmo(m_t)   [exact for Sign; sign(P M Q) = sign(M) for PD P,Q]
 
     Frank-Wolfe update (both paths):
-        w_{t+1}  =  (1 - η) · w_t  -  η · s · u
+        w_{t+1}  =  (1 - eta) . w_t  -  eta . s . u
 
     Args:
         params:                   Parameters to optimize.
-        lr (float):               Learning rate η (default: 1e-3).
+        lr (float):               Learning rate eta (default: 1e-3).
         momentum (float):         Momentum EMA coefficient (default: 0.9).
         norm (str):               LMO norm class (default: 'Auto').
         norm_kwargs (dict):       Extra kwargs for the norm class (default: {}).
@@ -420,16 +425,23 @@ class MousseScion(torch.optim.Optimizer):
             beta_scale      = group['beta_scale']
             skip_precond    = (group['norm'] != 'Spectral') and (group['norm'] != 'SpectralConv')
 
-            for p in group['params']:
-                if p.grad is None:
-                    continue
+            params = [p for p in group['params'] if p.grad is not None]
+            if not params:
+                continue
 
+            # ── Step 1: per-parameter bookkeeping ──────────────────────────
+            # Init state if needed, bump the step counter, reshape each
+            # gradient to 2D once. Inherently per-parameter (shapes/state
+            # differ) but cheap -- no linear algebra happens here.
+            grads_2d = []
+            bufs     = []
+            ts       = []
+            for p in params:
                 g    = p.grad
                 g_2d = to_2d(g).float()
                 m, n = g_2d.shape
                 state = self.state[p]
 
-                # ── Init ─────────────────────────────────────────────────────
                 if len(state) == 0:
                     state['step']            = 0
                     state['momentum_buffer'] = g_2d.clone()
@@ -443,54 +455,78 @@ class MousseScion(torch.optim.Optimizer):
                         state['eig_update_count'] = 0
 
                 state['step'] += 1
-                t = state['step']
+                grads_2d.append(g_2d)
+                bufs.append(state['momentum_buffer'])
+                ts.append(state['step'])
 
-                # ── Step 1: Momentum EMA ──────────────────────────────────────
-                buf = state['momentum_buffer']
-                if t > 1:
-                    buf.mul_(momentum).add_(g_2d, alpha=1. - momentum)
+            # ── Step 2: Momentum EMA, batched across the whole group ───────
+            # [CHANGE 2] Replaces the per-parameter buf.mul_().add_() calls
+            # with a single pair of multi-tensor (foreach) kernel launches
+            # covering every parameter in the group at once. Params on their
+            # very first step already have buf == g_2d (set above at init),
+            # so they're excluded here to avoid double-counting that first
+            # gradient -- identical semantics to the old `if t > 1:` guard.
+            ema_idx = [i for i, t in enumerate(ts) if t > 1]
+            if ema_idx:
+                ema_bufs  = [bufs[i] for i in ema_idx]
+                ema_grads = [grads_2d[i] for i in ema_idx]
+                torch._foreach_mul_(ema_bufs, momentum)
+                torch._foreach_add_(ema_bufs, ema_grads, alpha=1.0 - momentum)
 
-                # ═════════════════════════════════════════════════════════════
+            updates = []
+
+            for p, g_2d, buf, t in zip(params, grads_2d, bufs, ts):
+                g    = p.grad
+                m, n = g_2d.shape
+                state = self.state[p]
+
+                # ═════════════════════════════════════════════════════════
                 # BRANCH A — skip preconditioning (Sign / large-vocab layers)
-                # ═════════════════════════════════════════════════════════════
+                # ═════════════════════════════════════════════════════════
                 if skip_precond:
                     u = norm_backend.lmo(buf)
                     self.effective_lrs[group['norm']] = scale * lr
 
-                # ═════════════════════════════════════════════════════════════
+                # ═════════════════════════════════════════════════════════
                 # BRANCH B — full Mousse-Scion preconditioning
-                # ═════════════════════════════════════════════════════════════
+                # ═════════════════════════════════════════════════════════
                 else:
-                    # ── Step 2: Curvature EMA ─────────────────────────────────
-                    if eig_schedule is None or t <= eig_schedule.get('warmdown_start', float('inf')):
-                        state['L'].mul_(beta).add_(g_2d @ g_2d.T, alpha=1.0 - beta)
-                        state['R'].mul_(beta).add_(g_2d.T @ g_2d, alpha=1.0 - beta)
+                    # ── Step 3: Curvature EMA ─────────────────────────────
+                    state['L'].mul_(beta).add_(g_2d @ g_2d.T, alpha=1.0 - beta)
+                    state['R'].mul_(beta).add_(g_2d.T @ g_2d, alpha=1.0 - beta)
 
-                    # ── Step 3: Bias correction ───────────────────────────────
-                    if LR_correction:
-                        bc    = 1.0 - beta ** t
-                        L_hat = state['L'] / bc
-                        R_hat = state['R'] / bc
-                    else:
-                        L_hat = state['L']
-                        R_hat = state['R']
-
-                    # ── Step 4: Resolve effective eig_update_freq ─────────────
-                    # eig_schedule=None  → use fixed eig_update_freq unchanged.
-                    # eig_schedule set   → delegate to scheduler:
-                    #   returns None     → skip eigh this phase (EMA unreliable)
-                    #   returns int T    → refresh if t % T == 1 or first call
+                    # ── Step 4: Resolve effective eig_update_freq ─────────
+                    # eig_schedule=None  -> use fixed eig_update_freq unchanged.
+                    # eig_schedule set   -> delegate to scheduler:
+                    #   returns None     -> skip refreshing the eigenbasis
+                    #   returns int T    -> refresh if t % T == 1 or first call
                     if eig_schedule is None:
                         run_eigh = (t % eig_update_freq == 1 or state['eig_L'] is None)
                     else:
                         effective_T = get_eig_update_freq(t, eig_schedule)
                         if effective_T is None:
                             run_eigh = False
+                            # Deliberately NOT resetting state['eig_L']/state['eig_R']
+                            # here. During warmup they're already None and step 6
+                            # falls back to plain Scion below; during warmdown they
+                            # hold the last eigenbasis from Phase 2, and we want
+                            # step 6 to keep reusing it instead of discarding it.
                         else:
                             run_eigh = (t % effective_T == 1 or state['eig_L'] is None)
 
-                    # ── Step 5: Eigendecomposition ────────────────────────────
+                    # ── Step 5: Eigendecomposition ────────────────────────
+                    # [CHANGE 1] Bias correction and trace normalization are
+                    # only ever read inside this block, so they're computed
+                    # lazily here instead of unconditionally every step.
                     if run_eigh:
+                        if LR_correction:
+                            bc    = 1.0 - beta ** t
+                            L_hat = state['L'] / bc
+                            R_hat = state['R'] / bc
+                        else:
+                            L_hat = state['L']
+                            R_hat = state['R']
+
                         if use_trace_norm:
                             trace_L = L_hat.trace().clamp(min=eps)
                             trace_R = R_hat.trace().clamp(min=eps)
@@ -514,31 +550,9 @@ class MousseScion(torch.optim.Optimizer):
 
                         state['eig_update_count'] += 1
 
-                        # if state['eig_update_count']:
-                        #     # ── ADD THIS CHECK ──
-                        #     # Check if distributed is initialized. If not, it's single GPU (safe to save).
-                        #     # If it is, only let rank 0 save to avoid ID mismatch and file corruption.
-                        #     import torch.distributed as dist
-                        #     is_master = not dist.is_initialized() or dist.get_rank() == 0
-                            
-                        #     if is_master:
-                        #         # Create directory if it doesn't exist
-                        #         save_dir = "eigenvalue_logs"
-                        #         os.makedirs(save_dir, exist_ok=True)
-                                
-                        #         # Use the memory address of the parameter id(p) to separate layers, 
-                        #         # and 't' to mark the global step.
-                        #         filename = os.path.join(save_dir, f"evals_param{id(p)}_step{t}.pt")
-                                
-                        #         # Save as a dictionary directly to disk
-                        #         torch.save({
-                        #             'eval_L': eval_L.detach().cpu(),
-                        #             'eval_R': eval_R.detach().cpu()
-                        #         }, filename)
-
-                    # ── Step 6: Whitening / LMO / Unwhitening ─────────────────
-                    # If eig_L is still None (Phase 1 of schedule, first step),
-                    # fall back to plain Scion for this step — graceful degradation.
+                    # ── Step 6: Whitening / LMO / Unwhitening ─────────────
+                    # If eig_L is still None (Phase 1, before any eigenbasis
+                    # has ever been computed), fall back to plain Scion.
                     if state['eig_L'] is None:
                         u = norm_backend.lmo(buf)
                         self.effective_lrs[group['norm']] = scale * lr
@@ -558,7 +572,7 @@ class MousseScion(torch.optim.Optimizer):
                         u = norm_backend.lmo(M_white)
 
                         fro_norm = M_white.norm()
-                        dual_norm = (u * M_white).sum() #/ (min(m, n) ** 0.5)
+                        dual_norm = (u * M_white).sum()
                         current_ratio = dual_norm / fro_norm.clamp(min=eps)
 
                         state['smoothed_ratio'] = beta_scale * state['smoothed_ratio'] + (1.0 - beta_scale) * current_ratio
@@ -567,7 +581,7 @@ class MousseScion(torch.optim.Optimizer):
                         # Graft reference norm
                         if apply_grafting == "fro":
                             graft_norm = fro_norm
-                        elif apply_grafting == "lmo": # is actually equal to sqrt(d)
+                        elif apply_grafting == "lmo":  # is actually equal to sqrt(d)
                             graft_norm = u.norm()
                         elif apply_grafting == "ratio":
                             graft_norm = norm_ratio
@@ -575,7 +589,6 @@ class MousseScion(torch.optim.Optimizer):
                             warmup_steps = group.get('norm_warmup_steps', 500.)
                             tau_k = min(1.0, t / warmup_steps)
                             graft_norm = (1. - tau_k) * fro_norm + tau_k * dual_norm
-
                         else:  # "dual"
                             graft_norm = dual_norm
 
@@ -595,12 +608,16 @@ class MousseScion(torch.optim.Optimizer):
                         self.denom_norms[group['norm']] = u_norm.item() if hasattr(u_norm, 'item') else u_norm
                         self.norm_ratios[group['norm']] = norm_ratio.item() if hasattr(norm_ratio, 'item') else norm_ratio
 
-                # ── Step 7: Parameter update ──────────────────────────────────
-                # w_{t+1} = (1 - η) w_t - η · s · u
-                update = (scale * u).reshape(g.shape)
-                if not unconstrained:
-                    p.data.mul_(1.0 - lr)
-                p.data.add_(update, alpha=-lr)
+                updates.append((scale * u).reshape(g.shape))
+
+            # ── Step 7: Parameter update, batched across the whole group ───
+            # [CHANGE 2] w_{t+1} = (1 - eta) w_t - eta . s . u, applied to
+            # every parameter in the group via two foreach calls instead of
+            # a per-parameter mul_()/add_() pair.
+            param_data = [p.data for p in params]
+            if not unconstrained:
+                torch._foreach_mul_(param_data, 1.0 - lr)
+            torch._foreach_add_(param_data, updates, alpha=-lr)
 
         return loss
 

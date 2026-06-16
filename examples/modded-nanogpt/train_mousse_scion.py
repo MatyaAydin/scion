@@ -528,7 +528,7 @@ if __name__ == "__main__":
         "apply_grafting": args.grafting,
         "norm_warmup_steps": args.num_iterations / 10.,
         "beta_scale": args.beta_scale,
-        "eig_schedule": eig_schedule,
+        "eig_schedule": None#eig_schedule,
     }
 
     train_loss = main(args, optim_args)
