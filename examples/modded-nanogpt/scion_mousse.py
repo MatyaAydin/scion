@@ -659,16 +659,6 @@ class MousseScion(torch.optim.Optimizer):
                         #    space, because lmo(L^{-p} M R^{-p}) ≠ lmo in eigenbasis
                         #    for ColNorm, RowNorm, Sign, etc.
                         #
-                        # Full formula:
-                        #   M_tilde = L^{-p} M R^{-p}
-                        #           = Q_L Λ_L^{-p} Q_L^T  M  Q_R Λ_R^{-p} Q_R^T
-                        #   u_lmo   = lmo(M_tilde)          ← evaluated in original space
-                        #   O_k     = L^{-p} u_lmo R^{-p}
-                        #           = Q_L Λ_L^{-p} Q_L^T u_lmo Q_R Λ_R^{-p} Q_R^T
-                        #
-                        # One-sided fallback (when only L or only R is available):
-                        #   M_tilde = L^{-p} M    or    M R^{-p}
-                        #   O_k     = L^{-p} u_lmo or   u_lmo R^{-p}
                         else:
                             # --- Build M_tilde in the original parameter space ---
                             M_tilde = buf
@@ -684,12 +674,10 @@ class MousseScion(torch.optim.Optimizer):
 
                             fro_norm  = M_tilde.norm()
                             dual_norm = (u * M_tilde).sum()
-                            current_ratio = dual_norm / fro_norm.clamp(min=eps)
-                            state['smoothed_ratio'] = (
-                                beta_scale * state['smoothed_ratio']
-                                + (1.0 - beta_scale) * current_ratio
-                            )
-                            norm_ratio = state['smoothed_ratio']
+                            # For non-spectral norms, use the instantaneous ratio
+                            # directly — no EMA smoothing (smoothed_ratio is only
+                            # updated in the Spectral branch where it is well-motivated).
+                            norm_ratio = 1.#dual_norm / fro_norm.clamp(min=eps)
 
                             # --- Graft reference norm ---
                             if apply_grafting == "fro":
