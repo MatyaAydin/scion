@@ -284,39 +284,52 @@ class MousseScion(torch.optim.Optimizer):
     Mousse-style L,R preconditioning applied to the Scion optimizer.
 
     Update equations (per step t):
-        m_t  =  (1-μ) · m_{t-1}  +  μ · G_t                     [momentum]
-
-    When skip_preconditioning is False (full Mousse-Scion path):
-        L_t  =  β · L_{t-1}  +  (1-β) · G_t G_t^T               [left  curvature EMA]
-        R_t  =  β · R_{t-1}  +  (1-β) · G_t^T G_t               [right curvature EMA]
+        m_t  =  α_t · m_{t-1}  +  (1-α_t) · G_t                  [momentum]
+        L_t  =  β · L_{t-1}   +  (1-β) · G_t G_t^T               [left  curvature EMA]
+        R_t  =  β · R_{t-1}   +  (1-β) · G_t^T G_t               [right curvature EMA]
         (Λ_L, Q_L) = eigh(L̂_t),  (Λ_R, Q_R) = eigh(R̂_t)       [every effective T steps]
-        M̃      =  Q_L^T  m_t  Q_R                                [whiten: rotate]
-        M̃_{ij} /= λ_i^(L,α) · λ_j^(R,α)                        [whiten: scale]
-        u      =  lmo(M̃)
-        n*     =  ‖u‖_F  or  ⟨u, M̃⟩                            [graft reference]
-        u_{ij} /= λ_i^(L,α) · λ_j^(R,α)                        [unwhiten: scale]
-        u      =  Q_L  u  Q_R^T                                  [unwhiten: rotate]
-        u      ←  (n* / ‖u‖_F) · u                              [graft norm]
+        M̃      =  L^{-p} m_t R^{-p}                               [preconditioned momentum]
+        u      =  L^{-p} lmo(M̃) R^{-p}                            [preconditioned direction]
+        w_{t+1} = (1-η) w_t − η s u                               [Frank-Wolfe update]
 
-    When skip_preconditioning is True (Sign / large-vocab layers):
-        u  =  lmo(m_t)   [exact for Sign; sign(P M Q) = sign(M) for PD P,Q]
+    Preconditioning strategy per layer:
 
-    Frank-Wolfe update (both paths):
-        w_{t+1}  =  (1 - η) · w_t  -  η · s · u
+    Spectral / SpectralConv layers — orthogonality trick
+        lmo = msign (Newton-Schulz).  Since msign is applied between two orthogonal
+        Q factors, the Q^T Q = I identity cancels:
+            L^{-p} msign(M̃) R^{-p}  =  Q_L Λ_L^{-p} msign(Λ_L^{-p} Q_L^T M Q_R Λ_R^{-p}) Λ_R^{-p} Q_R^T
+        The entire whitening / LMO / unwhitening lives in the compact eigenbasis;
+        no full-size matrix is ever materialised.
+
+    All other 2-D layers (Sign, ColNorm, RowNorm, …) — full rebuild
+        lmo is not invariant to the pre/post multiplication by Q, so M̃ must be
+        reconstructed explicitly in the original parameter space:
+            M_tilde = Q_L Λ_L^{-p} Q_L^T  M  Q_R Λ_R^{-p} Q_R^T
+            u_lmo   = lmo(M_tilde)
+            O_k     = Q_L Λ_L^{-p} Q_L^T u_lmo Q_R Λ_R^{-p} Q_R^T
+
+    One-sided fallback (large-vocab / memory-constrained layers)
+        When one side exceeds max_precond_size the corresponding Gram matrix
+        (L or R) is not formed.  Only the affordable side is used:
+            M_tilde = L^{-p} M   (if only L fits)   or   M R^{-p}  (if only R fits)
+        Spectral layers are always small enough that both sides fit.
+
+    No preconditioning (both sides exceed max_precond_size)
+        u = lmo(m_t)   — plain Scion.
 
     Args:
         params:                   Parameters to optimize.
-        lr (float):               Learning rate η (default: 1e-3).
+        lr (float):               Learning rate η (default: 0.00036).
         momentum (float):         Momentum EMA coefficient (default: 0.9).
         norm (str):               LMO norm class (default: 'Auto').
         norm_kwargs (dict):       Extra kwargs for the norm class (default: {}).
         scale (float):            Constraint radius s (default: 1.0).
         unconstrained (bool):     Skip (1-lr) shrinkage (default: False).
-        beta (float):             Curvature EMA decay (default: 0.999).
-        alpha (float):            Curvature exponent (default: 0.125).
+        beta (float):             Curvature EMA decay (default: 0.99).
+        alpha (float):            Curvature exponent p (default: 0.125).
         eps (float):              Eigenvalue damping (default: 1e-8).
         eig_update_freq (int):    Fixed eigh frequency. Used only when
-                                  eig_schedule is None (default: 10).
+                                  eig_schedule is None (default: 125).
         eig_schedule (dict|None): Frequency schedule. When set,
                                   eig_update_freq is ignored. See
                                   get_eig_update_freq() for full key docs.
@@ -328,7 +341,12 @@ class MousseScion(torch.optim.Optimizer):
                                     }
         use_trace_normalization (bool): Trace-normalise L,R before eigh (default: True).
         LR_correction (bool):     Bias-correct curvature EMAs (default: True).
-        apply_grafting (str):     'fro' (default) or 'dual'.
+        apply_grafting (str):     'fro', 'dual', 'ratio', 'interpolate', or 'lmo'
+                                  (default: 'ratio').
+        max_precond_size (int):   Maximum dimension for which a Gram matrix
+                                  (L or R) is materialised.  Dimensions exceeding
+                                  this threshold fall back to one-sided or no
+                                  preconditioning (default: 8192).
     """
 
     def __init__(
@@ -350,6 +368,7 @@ class MousseScion(torch.optim.Optimizer):
         apply_grafting: str = "ratio",
         norm_warmup_steps: int = 500,
         beta_scale: float = 0.9,
+        max_precond_size: int = 8192,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -385,6 +404,7 @@ class MousseScion(torch.optim.Optimizer):
             apply_grafting=apply_grafting,
             norm_warmup_steps=norm_warmup_steps,
             beta_scale=beta_scale,
+            max_precond_size=max_precond_size,
         )
         super().__init__(params, defaults)
         self.effective_lrs = {}
@@ -404,21 +424,26 @@ class MousseScion(torch.optim.Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
-            lr              = group['lr']
-            momentum        = group['momentum']
-            scale           = group['scale']
-            unconstrained   = group['unconstrained']
-            norm_backend    = norm_dict[group['norm']](**group['norm_kwargs'])
-            beta            = group['beta']
-            alpha           = group['alpha']
-            eps             = group['eps']
-            eig_update_freq = group['eig_update_freq']
-            eig_schedule    = group['eig_schedule']
-            use_trace_norm  = group['use_trace_normalization']
-            LR_correction   = group['LR_correction']
-            apply_grafting  = group['apply_grafting']
-            beta_scale      = group['beta_scale']
-            skip_precond    = (group['norm'] != 'Spectral') and (group['norm'] != 'SpectralConv')
+            lr               = group['lr']
+            momentum         = group['momentum']
+            scale            = group['scale']
+            unconstrained    = group['unconstrained']
+            norm_backend     = norm_dict[group['norm']](**group['norm_kwargs'])
+            beta             = group['beta']
+            alpha            = group['alpha']
+            eps              = group['eps']
+            eig_update_freq  = group['eig_update_freq']
+            eig_schedule     = group['eig_schedule']
+            use_trace_norm   = group['use_trace_normalization']
+            LR_correction    = group['LR_correction']
+            apply_grafting   = group['apply_grafting']
+            beta_scale       = group['beta_scale']
+            max_precond_size = group['max_precond_size']
+            # Spectral norms allow the Q^TQ=I orthogonality trick: lmo is applied
+            # in the eigenbasis (whitened space) without needing to reconstruct the
+            # full preconditioned matrix.  All other norms require a full rebuild
+            # of M_tilde = L^{-p} M R^{-p} in the original space before lmo.
+            is_spectral = group['norm'] in ('Spectral', 'SpectralConv')
 
             for p in group['params']:
                 if p.grad is None:
@@ -429,17 +454,28 @@ class MousseScion(torch.optim.Optimizer):
                 m, n = g_2d.shape
                 state = self.state[p]
 
+                # ── Which sides of the preconditioner can we afford? ──────────
+                # L is m×m, R is n×n.  For a large-vocab projection the output
+                # dimension can be ~50k, making one side unaffordable.
+                # Spectral layers are small enough that both always fit; the check
+                # is only relevant for non-Spectral (e.g. Sign, ColNorm …) layers.
+                use_L = (m <= max_precond_size)
+                use_R = (n <= max_precond_size)
+                use_precond = use_L or use_R
+
                 # ── Init ─────────────────────────────────────────────────────
                 if len(state) == 0:
                     state['step']            = 0
                     state['momentum_buffer'] = g_2d.clone()
-
                     state['smoothed_ratio']  = (min(m, n)) ** 0.5
-                    if not skip_precond:
-                        state['L']     = eps * torch.eye(m, device=g.device, dtype=torch.float32)
-                        state['R']     = eps * torch.eye(n, device=g.device, dtype=torch.float32)
-                        state['eig_L'] = None
-                        state['eig_R'] = None
+
+                    if use_precond:
+                        if use_L:
+                            state['L']     = eps * torch.eye(m, device=g.device, dtype=torch.float32)
+                            state['eig_L'] = None
+                        if use_R:
+                            state['R']     = eps * torch.eye(n, device=g.device, dtype=torch.float32)
+                            state['eig_R'] = None
                         state['eig_update_count'] = 0
 
                 state['step'] += 1
@@ -451,66 +487,77 @@ class MousseScion(torch.optim.Optimizer):
                     buf.mul_(momentum).add_(g_2d, alpha=1. - momentum)
 
                 # ═════════════════════════════════════════════════════════════
-                # BRANCH A — skip preconditioning (Sign / large-vocab layers)
+                # BRANCH A — no preconditioning
+                #   · 1-D parameters (m=1 after to_2d, but only if g.ndim==1)
+                #   · both L and R are too large to store (use_precond=False)
                 # ═════════════════════════════════════════════════════════════
-                if skip_precond:
+                if not use_precond:
                     u = norm_backend.lmo(buf)
                     self.effective_lrs[group['norm']] = scale * lr
 
                 # ═════════════════════════════════════════════════════════════
-                # BRANCH B — full Mousse-Scion preconditioning
+                # BRANCH B — Mousse-Scion preconditioning
                 # ═════════════════════════════════════════════════════════════
                 else:
                     # ── Step 2: Curvature EMA ─────────────────────────────────
-                    if eig_schedule is None or t <= eig_schedule.get('warmdown_start', float('inf')):
-                        state['L'].mul_(beta).add_(g_2d @ g_2d.T, alpha=1.0 - beta)
-                        state['R'].mul_(beta).add_(g_2d.T @ g_2d, alpha=1.0 - beta)
+                    update_ema = (eig_schedule is None or
+                                  t <= eig_schedule.get('warmdown_start', float('inf')))
+                    if update_ema:
+                        if use_L:
+                            state['L'].mul_(beta).add_(g_2d @ g_2d.T, alpha=1.0 - beta)
+                        if use_R:
+                            state['R'].mul_(beta).add_(g_2d.T @ g_2d, alpha=1.0 - beta)
 
                     # ── Step 3: Bias correction ───────────────────────────────
                     if LR_correction:
-                        bc    = 1.0 - beta ** t
-                        L_hat = state['L'] / bc
-                        R_hat = state['R'] / bc
+                        bc = 1.0 - beta ** t
+                        L_hat = state['L'] / bc if use_L else None
+                        R_hat = state['R'] / bc if use_R else None
                     else:
-                        L_hat = state['L']
-                        R_hat = state['R']
+                        L_hat = state['L'] if use_L else None
+                        R_hat = state['R'] if use_R else None
 
                     # ── Step 4: Resolve effective eig_update_freq ─────────────
                     # eig_schedule=None  → use fixed eig_update_freq unchanged.
                     # eig_schedule set   → delegate to scheduler:
                     #   returns None     → skip eigh this phase (EMA unreliable)
                     #   returns int T    → refresh if t % T == 1 or first call
+                    first_eig = (use_L and state.get('eig_L') is None) or \
+                                (use_R and state.get('eig_R') is None)
                     if eig_schedule is None:
-                        run_eigh = (t % eig_update_freq == 1 or state['eig_L'] is None)
+                        run_eigh = (t % eig_update_freq == 1 or first_eig)
                     else:
                         effective_T = get_eig_update_freq(t, eig_schedule)
                         if effective_T is None:
                             run_eigh = False
                         else:
-                            run_eigh = (t % effective_T == 1 or state['eig_L'] is None)
+                            run_eigh = (t % effective_T == 1 or first_eig)
 
                     # ── Step 5: Eigendecomposition ────────────────────────────
                     if run_eigh:
-                        if use_trace_norm:
-                            trace_L = L_hat.trace().clamp(min=eps)
-                            trace_R = R_hat.trace().clamp(min=eps)
-                            L_norm  = L_hat * (m / trace_L)
-                            R_norm  = R_hat * (n / trace_R)
-                        else:
-                            L_norm = L_hat
-                            R_norm = R_hat
+                        if use_L:
+                            if use_trace_norm:
+                                trace_L = L_hat.trace().clamp(min=eps)
+                                L_norm  = L_hat * (m / trace_L)
+                            else:
+                                L_norm = L_hat
+                            eval_L, evec_L = torch.linalg.eigh(
+                                L_norm + eps * torch.eye(m, device=g.device)
+                            )
+                            eval_L = clean_eigenvalues(eval_L, eps)
+                            state['eig_L'] = (eval_L, evec_L)
 
-                        eval_L, evec_L = torch.linalg.eigh(
-                            L_norm + eps * torch.eye(m, device=g.device)
-                        )
-                        eval_R, evec_R = torch.linalg.eigh(
-                            R_norm + eps * torch.eye(n, device=g.device)
-                        )
-                        eval_L = clean_eigenvalues(eval_L, eps)
-                        eval_R = clean_eigenvalues(eval_R, eps)
-
-                        state['eig_L'] = (eval_L, evec_L)
-                        state['eig_R'] = (eval_R, evec_R)
+                        if use_R:
+                            if use_trace_norm:
+                                trace_R = R_hat.trace().clamp(min=eps)
+                                R_norm  = R_hat * (n / trace_R)
+                            else:
+                                R_norm = R_hat
+                            eval_R, evec_R = torch.linalg.eigh(
+                                R_norm + eps * torch.eye(n, device=g.device)
+                            )
+                            eval_R = clean_eigenvalues(eval_R, eps)
+                            state['eig_R'] = (eval_R, evec_R)
 
                         state['eig_update_count'] += 1
 
@@ -537,63 +584,143 @@ class MousseScion(torch.optim.Optimizer):
                         #         }, filename)
 
                     # ── Step 6: Whitening / LMO / Unwhitening ─────────────────
-                    # If eig_L is still None (Phase 1 of schedule, first step),
-                    # fall back to plain Scion for this step — graceful degradation.
-                    if state['eig_L'] is None:
+                    # Graceful degradation: if no eig has been computed yet (Phase 1
+                    # of schedule or very first step), fall back to plain Scion.
+                    eig_ready = ((not use_L or state.get('eig_L') is not None) and
+                                 (not use_R or state.get('eig_R') is not None))
+                    if not eig_ready:
                         u = norm_backend.lmo(buf)
                         self.effective_lrs[group['norm']] = scale * lr
                     else:
-                        eval_L, evec_L = state['eig_L']
-                        eval_R, evec_R = state['eig_R']
+                        # Retrieve cached eigenfactors (None when that side is skipped)
+                        eig_L = state.get('eig_L')   # (eval_L, evec_L) or None
+                        eig_R = state.get('eig_R')   # (eval_R, evec_R) or None
 
-                        scale_L = eval_L.pow(alpha)   # [m]
-                        scale_R = eval_R.pow(alpha)   # [n]
+                        if eig_L is not None:
+                            eval_L, evec_L = eig_L
+                            scale_L = eval_L.pow(alpha)   # [m]
+                        if eig_R is not None:
+                            eval_R, evec_R = eig_R
+                            scale_R = eval_R.pow(alpha)   # [n]
 
-                        # Whiten
-                        M_white = evec_L.T @ buf @ evec_R
-                        M_white = M_white / scale_L.unsqueeze(1)
-                        M_white = M_white / scale_R.unsqueeze(0)
+                        # ── Spectral norms: use the Q^TQ = I orthogonality trick ──
+                        #
+                        # lmo = msign (Newton-Schulz).  Because msign is applied
+                        # between two orthogonal factors:
+                        #   L^{-p} msign(L^{-p} M R^{-p}) R^{-p}
+                        #     = Q_L Λ_L^{-p} msign(Λ_L^{-p} Q_L^T M Q_R Λ_R^{-p}) Λ_R^{-p} Q_R^T
+                        # (the Q^T Q = I cancels between the outer and inner Λ factors)
+                        # so the entire computation lives in the compact eigenbasis.
+                        if is_spectral:
+                            # --- Whiten into eigenbasis ---
+                            M_white = buf
+                            if eig_L is not None:
+                                M_white = evec_L.T @ M_white
+                                M_white = M_white / scale_L.unsqueeze(1)
+                            if eig_R is not None:
+                                M_white = M_white @ evec_R
+                                M_white = M_white / scale_R.unsqueeze(0)
 
-                        # LMO in whitened space
-                        u = norm_backend.lmo(M_white)
+                            # --- LMO in (compact) whitened space ---
+                            u = norm_backend.lmo(M_white)
 
-                        fro_norm = M_white.norm()
-                        dual_norm = (u * M_white).sum() #/ (min(m, n) ** 0.5)
-                        current_ratio = dual_norm / fro_norm.clamp(min=eps)
+                            fro_norm  = M_white.norm()
+                            dual_norm = (u * M_white).sum()
+                            current_ratio = dual_norm / fro_norm.clamp(min=eps)
+                            state['smoothed_ratio'] = (
+                                beta_scale * state['smoothed_ratio']
+                                + (1.0 - beta_scale) * current_ratio
+                            )
+                            norm_ratio = state['smoothed_ratio']
 
-                        state['smoothed_ratio'] = beta_scale * state['smoothed_ratio'] + (1.0 - beta_scale) * current_ratio
-                        norm_ratio = state['smoothed_ratio']
+                            # --- Graft reference norm ---
+                            if apply_grafting == "fro":
+                                graft_norm = fro_norm
+                            elif apply_grafting == "lmo":
+                                graft_norm = u.norm()
+                            elif apply_grafting == "ratio":
+                                graft_norm = norm_ratio
+                            elif apply_grafting == "interpolate":
+                                warmup_steps = group.get('norm_warmup_steps', 500.)
+                                tau_k = min(1.0, t / warmup_steps)
+                                graft_norm = (1. - tau_k) * fro_norm + tau_k * dual_norm
+                            else:  # "dual"
+                                graft_norm = dual_norm
 
-                        # Graft reference norm
-                        if apply_grafting == "fro":
-                            graft_norm = fro_norm
-                        elif apply_grafting == "lmo": # is actually equal to sqrt(d)
-                            graft_norm = u.norm()
-                        elif apply_grafting == "ratio":
-                            graft_norm = norm_ratio
-                        elif apply_grafting == "interpolate":
-                            warmup_steps = group.get('norm_warmup_steps', 500.)
-                            tau_k = min(1.0, t / warmup_steps)
-                            graft_norm = (1. - tau_k) * fro_norm + tau_k * dual_norm
+                            # --- Unwhiten: Λ^{-p} u Λ^{-p}, then rotate back ---
+                            if eig_R is not None:
+                                u = u / scale_R.unsqueeze(0)
+                                u = u @ evec_R.T
+                            if eig_L is not None:
+                                u = u / scale_L.unsqueeze(1)
+                                u = evec_L @ u
 
-                        else:  # "dual"
-                            graft_norm = dual_norm
+                        # ── Non-spectral norms: rebuild M_tilde in the original ──
+                        #    space, because lmo(L^{-p} M R^{-p}) ≠ lmo in eigenbasis
+                        #    for ColNorm, RowNorm, Sign, etc.
+                        #
+                        # Full formula:
+                        #   M_tilde = L^{-p} M R^{-p}
+                        #           = Q_L Λ_L^{-p} Q_L^T  M  Q_R Λ_R^{-p} Q_R^T
+                        #   u_lmo   = lmo(M_tilde)          ← evaluated in original space
+                        #   O_k     = L^{-p} u_lmo R^{-p}
+                        #           = Q_L Λ_L^{-p} Q_L^T u_lmo Q_R Λ_R^{-p} Q_R^T
+                        #
+                        # One-sided fallback (when only L or only R is available):
+                        #   M_tilde = L^{-p} M    or    M R^{-p}
+                        #   O_k     = L^{-p} u_lmo or   u_lmo R^{-p}
+                        else:
+                            # --- Build M_tilde in the original parameter space ---
+                            M_tilde = buf
+                            if eig_L is not None:
+                                # Apply L^{-p} on the left: Q_L Λ_L^{-p} Q_L^T M
+                                M_tilde = evec_L @ (evec_L.T @ M_tilde / scale_L.unsqueeze(1))
+                            if eig_R is not None:
+                                # Apply R^{-p} on the right: (...) Q_R Λ_R^{-p} Q_R^T
+                                M_tilde = (M_tilde @ evec_R / scale_R.unsqueeze(0)) @ evec_R.T
 
-                        # Unwhiten
-                        u = u / scale_L.unsqueeze(1)
-                        u = u / scale_R.unsqueeze(0)
-                        u = evec_L @ u @ evec_R.T
+                            # --- LMO in original space ---
+                            u = norm_backend.lmo(M_tilde)
 
-                        # Graft
+                            fro_norm  = M_tilde.norm()
+                            dual_norm = (u * M_tilde).sum()
+                            current_ratio = dual_norm / fro_norm.clamp(min=eps)
+                            state['smoothed_ratio'] = (
+                                beta_scale * state['smoothed_ratio']
+                                + (1.0 - beta_scale) * current_ratio
+                            )
+                            norm_ratio = state['smoothed_ratio']
+
+                            # --- Graft reference norm ---
+                            if apply_grafting == "fro":
+                                graft_norm = fro_norm
+                            elif apply_grafting == "lmo":
+                                graft_norm = u.norm()
+                            elif apply_grafting == "ratio":
+                                graft_norm = norm_ratio
+                            elif apply_grafting == "interpolate":
+                                warmup_steps = group.get('norm_warmup_steps', 500.)
+                                tau_k = min(1.0, t / warmup_steps)
+                                graft_norm = (1. - tau_k) * fro_norm + tau_k * dual_norm
+                            else:  # "dual"
+                                graft_norm = dual_norm
+
+                            # --- Apply L^{-p} and R^{-p} to the lmo output ---
+                            if eig_L is not None:
+                                u = evec_L @ (evec_L.T @ u / scale_L.unsqueeze(1))
+                            if eig_R is not None:
+                                u = (u @ evec_R / scale_R.unsqueeze(0)) @ evec_R.T
+
+                        # ── Graft (common to both spectral and non-spectral) ──────
                         u_norm = u.norm()
                         if u_norm > eps:
                             u = (graft_norm / u_norm) * u
 
                         self.effective_lrs[group['norm']] = lr * scale * graft_norm / u_norm
-                        self.fro_norms[group['norm']] = fro_norm.item() if hasattr(fro_norm, 'item') else fro_norm
-                        self.dual_norms[group['norm']] = dual_norm.item() if hasattr(dual_norm, 'item') else dual_norm
-                        self.denom_norms[group['norm']] = u_norm.item() if hasattr(u_norm, 'item') else u_norm
-                        self.norm_ratios[group['norm']] = norm_ratio.item() if hasattr(norm_ratio, 'item') else norm_ratio
+                        self.fro_norms[group['norm']]   = fro_norm.item()  if hasattr(fro_norm,  'item') else fro_norm
+                        self.dual_norms[group['norm']]  = dual_norm.item() if hasattr(dual_norm, 'item') else dual_norm
+                        self.denom_norms[group['norm']] = u_norm.item()    if hasattr(u_norm,    'item') else u_norm
+                        self.norm_ratios[group['norm']] = norm_ratio.item() if hasattr(norm_ratio,'item') else norm_ratio
 
                 # ── Step 7: Parameter update ──────────────────────────────────
                 # w_{t+1} = (1 - η) w_t - η · s · u
