@@ -677,7 +677,7 @@ class MousseScion(torch.optim.Optimizer):
                             # For non-spectral norms, use the instantaneous ratio
                             # directly — no EMA smoothing (smoothed_ratio is only
                             # updated in the Spectral branch where it is well-motivated).
-                            norm_ratio = 1.#dual_norm / fro_norm.clamp(min=eps)
+                            norm_ratio = dual_norm
 
                             # --- Graft reference norm ---
                             if apply_grafting == "fro":
